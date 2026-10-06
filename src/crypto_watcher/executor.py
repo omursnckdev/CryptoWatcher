@@ -8,6 +8,7 @@ Safety invariants:
 from datetime import datetime, timezone
 import logging
 import time
+import zlib
 from .binance import BinanceError, ROUND_HALF_UP, round_step
 from .config import Settings
 from .data import SymbolInfo
@@ -16,6 +17,11 @@ from . import telegram as tg
 
 log = logging.getLogger(__name__)
 DEAD_ALGO = {"NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+
+
+def client_id(kind: str, symbol: str, ms: int) -> str:
+    """Unique per (symbol, time); within Binance's 36-char limit."""
+    return f"cw-{kind}-{ms:x}{zlib.crc32(symbol.encode()) & 0xfffff:05x}"
 
 
 def _today(clock) -> str:
@@ -123,7 +129,7 @@ class Executor:
             return None
         opened_ms = int(self._clock() * 1000)
         try:
-            self.client.market_order(symbol, order_side, plan["quantity"], client_id=f"cw-e-{opened_ms}")
+            self.client.market_order(symbol, order_side, plan["quantity"], client_id=client_id("e", symbol, opened_ms))
         except BinanceError as error:
             log.error("Entry order error for %s: %s (checking exchange position)", symbol, error)
         positions = self.client.positions(symbol)
@@ -135,10 +141,9 @@ class Executor:
         distance = plan["risk_distance"]
         stop = round_step(entry - sign * distance, info.tick, ROUND_HALF_UP)
         take = round_step(entry + sign * self.s.tp_r * distance, info.tick, ROUND_HALF_UP)
-        tag = f"{opened_ms:x}"
         trade = {"symbol": symbol, "side": side, "entry": entry, "quantity": quantity, "stop": stop, "initial_stop": stop,
                  "take_profit": take, "risk_distance": distance, "leverage": leverage, "margin_type": self.s.margin_type,
-                 "opened_ms": opened_ms, "sl_id": f"cw-sl-{tag}", "tp_id": f"cw-tp-{tag}", "breakeven_done": False,
+                 "opened_ms": opened_ms, "sl_id": client_id("sl", symbol, opened_ms), "tp_id": client_id("tp", symbol, opened_ms), "breakeven_done": False,
                  "breakeven_r": self.s.breakeven_r, "be_failures": 0, "finalize_attempts": 0,
                  "planned_risk": quantity * distance, "risk_reward": self.s.tp_r, "score": candidate["score"],
                  "signal": candidate["signal"]}
@@ -211,7 +216,7 @@ class Executor:
         if sign * (mark - new_stop) <= 0:
             return
         exit_side = "SELL" if sign > 0 else "BUY"
-        new_id = f"cw-be-{int(self._clock() * 1000):x}"
+        new_id = client_id("be", symbol, int(self._clock() * 1000))
         try:
             # reduce-only (not closePosition): Binance allows a single closePosition stop per direction
             self.client.algo_order(symbol, exit_side, "STOP_MARKET", new_stop, new_id, quantity=trade["quantity"])
@@ -277,6 +282,11 @@ class Executor:
             daily["realized"] += outcome["net_pnl"]
             daily["trades"] += 1
             daily["wins"] += outcome["net_pnl"] > 0
+        if outcome["net_pnl"] is not None:
+            totals = self.state["totals"]
+            totals["trades"] += 1
+            totals["wins"] += outcome["net_pnl"] > 0
+            totals["realized"] += outcome["net_pnl"]
         self.state["trades"].pop(symbol, None)
         self.state["cooldowns"][symbol] = self._clock() + self.s.cooldown_minutes * 60
         self.state.record_close({"symbol": symbol, "side": side, "entry": trade["entry"], "exit": exit_price,
@@ -296,7 +306,7 @@ class Executor:
                 continue
             exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
             if trade["sl_id"] not in live_ids:
-                trade["sl_id"] = f"cw-sl-{int(self._clock() * 1000):x}"
+                trade["sl_id"] = client_id("sl", symbol, int(self._clock() * 1000))
                 try:
                     self.client.algo_order(symbol, exit_side, "STOP_MARKET", trade["stop"], trade["sl_id"])
                     self.notify.send(tg.fmt_warning(f"{symbol}: yeniden başlatmada stop emri eksikti, yeniden kondu ({tg.price(trade['stop'])})."))
@@ -304,7 +314,7 @@ class Executor:
                     self._emergency_close(symbol, exit_side, abs(float(positions[symbol]["positionAmt"])),
                                           f"Stop emri yeniden konulamadı ({error}); pozisyon kapatıldı.")
             if trade.get("tp_id") and trade["tp_id"] not in live_ids:
-                trade["tp_id"] = f"cw-tp-{int(self._clock() * 1000):x}"
+                trade["tp_id"] = client_id("tp", symbol, int(self._clock() * 1000))
                 try:
                     self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", trade["take_profit"], trade["tp_id"])
                 except BinanceError as error:

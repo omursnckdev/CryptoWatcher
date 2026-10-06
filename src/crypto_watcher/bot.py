@@ -12,7 +12,13 @@ from .state import StateStore
 from . import telegram as tg
 
 log = logging.getLogger(__name__)
-COMMANDS = {"/help": "Komutlar: /status /positions /top /pnl /pause /resume"}
+MENU = [("/positions", "Açık pozisyonlar ve anlık kâr/zarar"), ("/pnl", "Kâr/zarar özeti"), ("/status", "Bot durumu ve bakiye"),
+        ("/top", "En yüksek skorlu coinler"), ("/pause", "Yeni işlem açmayı durdur"), ("/resume", "Yeni işlem açmaya devam et"),
+        ("/help", "Komut listesi")]
+ALIASES = {"/pozisyon": "/positions", "/pozisyonlar": "/positions", "/kar": "/pnl", "/zarar": "/pnl", "/karzarar": "/pnl",
+           "/bakiye": "/pnl", "/durum": "/status", "/start": "/help", "/yardim": "/help"}
+HELP = ("Komutlar:\n/positions (/pozisyon): açık pozisyonlar, anlık fiyat ve kâr/zarar\n/pnl (/kar): günlük ve toplam kâr/zarar\n"
+        "/status (/durum): bot durumu ve bakiye\n/top: en yüksek skorlar\n/pause, /resume: yeni işlem açmayı durdur/sürdür")
 
 
 class Bot:
@@ -38,6 +44,7 @@ class Bot:
             self.executor.infos = self.infos
             self.executor.prepare()
         self._refresh_universe(force=True)
+        self.notify.set_commands(MENU)
         balance = None
         if self.executor:
             balance = self.executor.balance()
@@ -142,23 +149,52 @@ class Bot:
             self.notify.send(self._answer(command))
 
     def _answer(self, command: str) -> str:
-        if command == "/pause" or command == "/resume":
+        command = ALIASES.get(command, command)
+        if command in ("/pause", "/resume"):
             self.state["paused"] = command == "/pause"
             self.state.save()
             return "⏸ Yeni işlem açılışı durduruldu (açık pozisyonlar yönetilmeye devam eder)." if self.state["paused"] \
                 else "▶️ Yeni işlem açılışı yeniden başladı."
         if command == "/top":
             return tg.fmt_top(self.report) if self.report else "Henüz tarama yapılmadı."
-        if command == "/pnl":
-            daily = self.state["daily"]
-            rows = [f"{h['symbol']} {h['side']}: {h['pnl']:+.2f} ({h['reason']})" if h["pnl"] is not None
-                    else f"{h['symbol']} {h['side']}: ? ({h['reason']})" for h in self.state["history"][-8:]]
-            return tg.fmt_daily(daily) + ("\n" + "\n".join(tg.esc(r) for r in rows) if rows else "") if daily else "Veri yok."
-        if command in ("/status", "/positions"):
-            return self._status(command == "/positions")
-        return COMMANDS["/help"]
+        if command in ("/pnl", "/positions"):
+            try:
+                return self._positions() if command == "/positions" else self._pnl()
+            except BinanceError as error:
+                return tg.fmt_warning(f"Borsa okunamadı: {error}")
+        if command == "/status":
+            return self._status()
+        return HELP
 
-    def _status(self, detail: bool) -> str:
+    def _live_rows(self) -> tuple[list[dict], dict | None]:
+        """Open positions merged with live exchange data (mark price, unrealized PnL, liquidation)."""
+        if self.dry_run:
+            return [], None
+        balance = self.executor.balance()
+        live = {p["symbol"]: p for p in self.executor.client.positions()}
+        rows = []
+        for symbol, trade in self.state["trades"].items():
+            if symbol in live:
+                position = live[symbol]
+                rows.append({**trade, "mark": float(position["markPrice"]), "pnl": float(position["unRealizedProfit"]),
+                             "liquidation": float(position.get("liquidationPrice") or 0) or None})
+        return rows, balance
+
+    def _positions(self) -> str:
+        if self.dry_run:
+            return "ℹ️ DRY-RUN modunda emir gönderilmediği için açık pozisyon yok."
+        rows, balance = self._live_rows()
+        return tg.fmt_positions(rows, balance, int(self._clock() * 1000))
+
+    def _pnl(self) -> str:
+        daily = self.state["daily"] or {"date": "-"}
+        unrealized, balance = None, None
+        if not self.dry_run:
+            rows, balance = self._live_rows()
+            unrealized = sum(r["pnl"] for r in rows)
+        return tg.fmt_pnl(daily, self.state["totals"], unrealized, self.state["history"], balance)
+
+    def _status(self) -> str:
         trades = self.state["trades"]
         lines = [f"ℹ️ <b>Durum</b>{' (DRY-RUN)' if self.dry_run else ''}: {'DURAKLATILDI' if self.state['paused'] else 'aktif'} · "
                  f"açık pozisyon {len(trades)}/{self.s.max_open_positions}"]
@@ -168,13 +204,10 @@ class Bot:
             try:
                 balance = self.executor.balance()
                 lines.append(f"Bakiye {tg.money(balance['wallet'])} USDT · gerçekleşmemiş {balance['unrealized']:+.2f}")
-                live = {p["symbol"]: p for p in self.executor.client.positions()}
             except BinanceError as error:
-                return "\n".join(lines + [f"Borsa okunamadı: {tg.esc(error)}"])
-            for symbol, t in trades.items():
-                pnl = float(live[symbol]["unRealizedProfit"]) if symbol in live else 0.0
-                lines.append(f"• <code>{tg.esc(symbol)}</code> {t['side']} {t['leverage']}x giriş {tg.price(t['entry'])} "
-                             f"stop {tg.price(t['stop'])} hedef {tg.price(t['take_profit'])} PnL {pnl:+.2f}")
+                lines.append(f"Borsa okunamadı: {tg.esc(error)}")
+            if trades:
+                lines.append("Ayrıntı için /positions")
         return "\n".join(lines)
 
 

@@ -83,7 +83,15 @@ Her işlem Türkçe bildirilir: 🟢 LONG / 🔴 SHORT açıldı (kaldıraç, gi
 🛡 stop başa çekildi, ✅/❌ pozisyon kapandı (sebep: stop / TP / başa baş / zaman / dış müdahale; net PnL, R katı, komisyon, süre),
 ⚠️ uyarılar (emir hataları, korumasız pozisyon, izlenmeyen pozisyon), 📊 günlük özet.
 
-Komutlar (yalnızca `TELEGRAM_CHAT_ID` sahibinden kabul edilir): `/status` `/positions` `/top` `/pnl` `/pause` `/resume` `/help`.
+Komutlar (yalnızca `TELEGRAM_CHAT_ID` sahibinden kabul edilir; bot **çalışırken** cevap verir, Telegram'daki `/` menüsüne otomatik eklenir):
+
+| Komut | Ne gösterir |
+|---|---|
+| `/positions` (`/pozisyon`) | Açık pozisyonlar: giriş → anlık fiyat, PnL (USDT), ROE, R katı, stop/hedef, tasfiye fiyatı, süre, toplam gerçekleşmemiş |
+| `/pnl` (`/kar`) | Bugün gerçekleşen + açık pozisyonların gerçekleşmemiş PnL'i, tüm zamanlar toplamı ve isabet oranı, son 5 işlem |
+| `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
+| `/top` | En yüksek skorlu 5 coin |
+| `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
 
 ## Ayarlar
 
@@ -110,7 +118,7 @@ Başlıcaları: `leverage`, `risk_fraction`, `capital_usdt`, `max_open_positions
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 78 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 83 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

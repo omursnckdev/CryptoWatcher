@@ -78,6 +78,13 @@ class OpenTests(Base):
         self.assertLess(algos["TAKE_PROFIT_MARKET"]["triggerPrice"], trade["entry"])
         self.assertIn("SHORT AÇILDI", self.messages())
 
+    def test_client_ids_are_unique_per_symbol_even_in_the_same_millisecond(self):
+        from crypto_watcher.executor import client_id
+        a, b = client_id("sl", "DOGEUSDT", 1791284400000), client_id("sl", "XRPUSDT", 1791284400000)
+        self.assertNotEqual(a, b)
+        self.assertLessEqual(len(client_id("sl", "1000000BOBUSDT", 1791284400000)), 36)
+        self.assertRegex(a, r"^[.A-Za-z0-9:/_-]{1,36}$")
+
     def test_risk_is_bounded(self):
         trade = self.open("DOGEUSDT")
         self.assertLessEqual(trade["planned_risk"], 10_000 * self.settings.risk_fraction * 1.001)
@@ -302,13 +309,76 @@ class BotTests(Base):
         self.clock.now += 400
         bot.tick()
         text = self.messages()
-        for expected in ("Durum", "En yüksek skorlar", "Günlük özet", "Komutlar"):
+        for expected in ("Durum", "En yüksek skorlar", "Kâr / Zarar", "Açık pozisyon yok", "Komutlar"):
             self.assertIn(expected, text)
         self.notifier.commands = ["/resume"]
         self.clock.now += 400
         bot.tick()
         self.assertFalse(self.state["paused"])
         self.assertEqual(len(self.state["trades"]), 3)
+
+    def test_positions_command_shows_live_pnl(self):
+        bot = self.make_bot()
+        bot.tick()
+        long_t, short_t = self.state["trades"]["DOGEUSDT"], self.state["trades"]["XRPUSDT"]
+        self.ex.move("DOGEUSDT", long_t["entry"] + 0.5 * long_t["risk_distance"])      # +0.5R
+        self.ex.move("XRPUSDT", short_t["entry"] + 0.5 * short_t["risk_distance"])      # short is losing 0.5R
+        self.clock.now += 3600 + 600
+        reply = bot._answer("/positions")
+        self.assertIn("Açık pozisyonlar (3)", reply)
+        self.assertIn("DOGEUSDT", reply)
+        self.assertIn("+0.50R", reply)
+        self.assertIn("-0.50R", reply)
+        self.assertIn("1sa 10dk", reply)
+        self.assertIn("Anlık", reply)
+        expected = (long_t["quantity"] * 0.5 * long_t["risk_distance"]) - (short_t["quantity"] * 0.5 * short_t["risk_distance"])
+        btc = self.state["trades"]["BTCUSDT"]
+        self.assertIn("Toplam gerçekleşmemiş", reply)
+        self.assertEqual(bot._answer("/pozisyon"), reply)  # Turkish alias
+        self.assertIn("Stop", reply)
+        self.assertIn("Hedef", reply)
+
+    def test_pnl_command_combines_realized_unrealized_and_lifetime(self):
+        bot = self.make_bot()
+        bot.tick()
+        trade = self.state["trades"]["DOGEUSDT"]
+        self.ex.move("DOGEUSDT", trade["take_profit"] * 1.001)
+        self.executor.manage()                                   # TP hit -> realized profit
+        xrp = self.state["trades"]["XRPUSDT"]
+        self.ex.move("XRPUSDT", xrp["entry"] - 0.4 * xrp["risk_distance"])   # short in profit, unrealized
+        reply = bot._answer("/pnl")
+        self.assertIn("Bugün gerçekleşen: <b>+", reply)
+        self.assertIn("(1 işlem, 1 kazanan)", reply)
+        self.assertIn("gerçekleşmemiş", reply)
+        self.assertIn("Tüm zamanlar", reply)
+        self.assertIn("isabet %100", reply)
+        self.assertIn("DOGEUSDT LONG", reply)                    # recent trades list
+        self.assertEqual(self.state["totals"]["trades"], 1)
+        self.assertGreater(self.state["totals"]["realized"], 0)
+        self.assertEqual(bot._answer("/kar"), reply)
+
+    def test_commands_in_dry_run_and_on_exchange_failure(self):
+        bot = self.make_bot(executor=False)
+        self.assertIn("DRY-RUN", bot._answer("/positions"))
+        self.assertIn("Tüm zamanlar", bot._answer("/pnl"))
+        live = self.make_bot()
+        self.ex.positions = lambda symbol=None: (_ for _ in ()).throw(BinanceError("down", -1000, 500))
+        self.assertIn("Borsa okunamadı", live._answer("/positions"))
+        self.assertIn("Borsa okunamadı", live._answer("/pnl"))
+
+    def test_command_menu_is_registered_when_configured(self):
+        class Session:
+            def __init__(self): self.calls = []
+            def post(self, url, json=None, timeout=None):
+                self.calls.append((url.rsplit("/", 1)[1], json))
+                class R:
+                    status_code = 200
+                    def json(self): return {"ok": True}
+                return R()
+        session = Session()
+        TelegramNotifier("T", "1", session=session).set_commands([("/positions", "x"), ("/pnl", "y")])
+        self.assertEqual(session.calls[0][0], "setMyCommands")
+        self.assertEqual([c["command"] for c in session.calls[0][1]["commands"]], ["positions", "pnl"])
 
     def test_exchange_error_does_not_kill_the_loop(self):
         bot = self.make_bot()

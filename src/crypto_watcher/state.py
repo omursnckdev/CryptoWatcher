@@ -9,7 +9,8 @@ HISTORY_LIMIT = 50
 
 def default_state() -> dict:
     return {"trades": {}, "cooldowns": {}, "daily": {}, "history": [], "signaled": {}, "paused": False,
-            "tg_offset": 0, "alerts": {}}
+            "tg_offset": 0, "alerts": {},
+            "totals": {"trades": 0, "wins": 0, "realized": 0.0}}
 
 
 class StateStore:

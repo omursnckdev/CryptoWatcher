@@ -91,6 +91,11 @@ class TelegramNotifier:
             ok &= sent is not None
         return ok
 
+    def set_commands(self, commands: list[tuple[str, str]]):
+        """Show the command menu in Telegram. Best effort."""
+        if self.configured:
+            self._call("setMyCommands", {"commands": [{"command": c.lstrip("/"), "description": d} for c, d in commands]})
+
     def poll(self, offset: int) -> tuple[list[str], int]:
         """Commands from the authorised chat only. -> (commands, next_offset)."""
         if not self.configured:
@@ -181,6 +186,56 @@ def fmt_top(report: dict, n: int = 5) -> str:
     lines = [f"🔎 <b>En yüksek skorlar</b> · BTC rejimi {esc(report['market_regime'])}"]
     for s in report["signals"][:n]:
         lines.append(f"<code>{esc(s['symbol']):10}</code> {s['score']:5.1f} {esc(s['side'])} {esc(s['signal'])}")
+    return "\n".join(lines)
+
+
+def _held(opened_ms: int, now_ms: int) -> str:
+    minutes = max(0, now_ms - opened_ms) // 60_000
+    return f"{minutes // 60}sa {minutes % 60}dk"
+
+
+def fmt_positions(rows: list[dict], balance: dict | None, now_ms: int) -> str:
+    """rows: trade fields + live exchange fields (mark, pnl, liquidation) per open position."""
+    if not rows:
+        return "📭 Açık pozisyon yok."
+    lines = [f"📌 <b>Açık pozisyonlar ({len(rows)})</b>"]
+    total = 0.0
+    for r in rows:
+        total += r["pnl"]
+        sign = 1 if r["side"] == "LONG" else -1
+        margin = r["quantity"] * r["entry"] / r["leverage"]
+        move = sign * (r["mark"] - r["entry"]) / r["entry"] * 100
+        icon = "🟢" if r["side"] == "LONG" else "🔴"
+        lines += [f"{icon} <b>{esc(r['side'])}</b> <code>{esc(r['symbol'])}</code> {r['leverage']}x",
+                  f"Giriş {price(r['entry'])} → Anlık {price(r['mark'])} ({move:+.2f}%)",
+                  f"PnL: <b>{r['pnl']:+,.2f} USDT</b> · ROE {r['pnl'] / margin * 100:+.1f}% · {r['pnl'] / r['planned_risk']:+.2f}R"
+                  if r.get("planned_risk") else f"PnL: <b>{r['pnl']:+,.2f} USDT</b> · ROE {r['pnl'] / margin * 100:+.1f}%",
+                  f"Stop {price(r['stop'])}{' (başa baş)' if r.get('breakeven_done') else ''} · Hedef {price(r['take_profit'])}"
+                  + (f" · Tasfiye {price(r['liquidation'])}" if r.get("liquidation") else ""),
+                  f"Marj {money(margin)} USDT · Süre {_held(r['opened_ms'], now_ms)}"]
+    lines.append(f"━━━━━━━━\nToplam gerçekleşmemiş: <b>{total:+,.2f} USDT</b>")
+    if balance:
+        lines.append(f"Cüzdan {money(balance['wallet'])} USDT · Özkaynak {money(balance['wallet'] + balance['unrealized'])} USDT")
+    return "\n".join(lines)
+
+
+def fmt_pnl(daily: dict, totals: dict, unrealized: float | None, history: list[dict], balance: dict | None) -> str:
+    realized_today = daily.get("realized", 0.0)
+    lines = [f"💰 <b>Kâr / Zarar</b> ({esc(daily.get('date', '-'))} UTC)",
+             f"Bugün gerçekleşen: <b>{realized_today:+,.2f} USDT</b> ({daily.get('trades', 0)} işlem, {daily.get('wins', 0)} kazanan)"]
+    if unrealized is not None:
+        lines.append(f"Açık pozisyonlar (gerçekleşmemiş): <b>{unrealized:+,.2f} USDT</b>")
+        lines.append(f"Bugün toplam: <b>{realized_today + unrealized:+,.2f} USDT</b>")
+    trades = totals.get("trades", 0)
+    rate = f"%{totals.get('wins', 0) / trades * 100:.0f}" if trades else "-"
+    lines.append(f"Tüm zamanlar: {totals.get('realized', 0.0):+,.2f} USDT · {trades} işlem · isabet {rate}")
+    if balance:
+        lines.append(f"Cüzdan {money(balance['wallet'])} USDT")
+    recent = [h for h in history[-5:]][::-1]
+    if recent:
+        lines.append("Son işlemler:")
+        lines += [f"{'✅' if (h['pnl'] or 0) > 0 else '❌' if h['pnl'] is not None else '⚪'} {esc(h['symbol'])} {esc(h['side'])} "
+                  f"{'?' if h['pnl'] is None else format(h['pnl'], '+.2f')} ({esc(h['reason'])})" for h in recent]
     return "\n".join(lines)
 
 
