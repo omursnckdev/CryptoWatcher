@@ -80,8 +80,7 @@ funding, ATR bandı dışı, sinyal mumundan beri fiyat > 1 ATR kaymış, aleyht
 ## Telegram
 
 **Bot yalnızca iki durumda mesaj atar:** (1) siz bir komut yazınca, (2) bir işlem **açıldığında, kapandığında veya revize edildiğinde**
-(stop başa çekilince / yeniden konunca). Başlangıç-durdurma mesajı, günlük özet ve hata uyarısı gönderilmez; hatalar log'a yazılır
-ve `/status` içinde "Son sorun" olarak görünür. Tek istisna korumasız kalan pozisyon gibi güvenlik uyarılarıdır.
+(stop başa çekilince / yeniden konunca). Başlangıç-durdurma mesajı, günlük özet ve hata uyarısı gönderilmez; hatalar yalnızca log'a yazılır. Tek istisna korumasız kalan pozisyon gibi güvenlik uyarılarıdır.
 (`run --dry-run` modunda emir olmadığından, "açılacak" işlemler her mumda tek bir özet mesajında gelir.)
 
 ```
@@ -101,7 +100,7 @@ Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomat
 |---|---|
 | `/positions` (`/pozisyon`) | Açık pozisyonlar, pozisyon başına 2 satır: PnL (USDT, %, R), giriş → anlık fiyat, SL/TP, süre; toplam açık PnL |
 | `/pnl` (`/kar`) | Bugün (kapanan + açık), tüm zamanlar, isabet oranı, son 5 işlem |
-| `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi, son sorun |
+| `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
 | `/top` | En yüksek skorlu 5 coin |
 | `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
 

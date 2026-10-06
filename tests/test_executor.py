@@ -434,16 +434,40 @@ class BotTests(Base):
         self.ex.positions = lambda symbol=None: (_ for _ in ()).throw(BinanceError("boom", -1000, 500))
         bot.tick()  # must not raise
         self.assertNotIn("boom", self.messages())               # errors are not pushed...
-        self.assertIn("boom", bot._answer("/status"))           # ...but /status shows them
+        self.assertIn("boom", self.state["last_error"]["text"])  # ...they are only recorded (and logged)
 
-    def test_status_shows_age_and_clears_loop_errors_once_scans_work_again(self):
+    def test_status_does_not_show_problems_but_they_are_recorded(self):
         bot = self.make_bot()
-        bot._error("binance", BinanceError("Network error on /fapi/v1/ticker/24hr: SSLError", None, None))
-        self.clock.now += 180
-        self.assertIn("3 dk önce", bot._answer("/status"))
-        self.assertIn("SSLError", bot._answer("/status"))
-        bot.tick()                                                # a successful scan
-        self.assertNotIn("Son sorun", bot._answer("/status"))
+        bot._error("binance", BinanceError("Network error: SSLError", None, None))
+        self.assertNotIn("sorun", bot._answer("/status").lower())
+        self.assertNotIn("SSLError", bot._answer("/status"))
+        self.assertIn("SSLError", self.state["last_error"]["text"])   # still available for debugging
+        bot.tick()                                                     # a successful scan clears it
+        self.assertIsNone(self.state["last_error"])
+
+    def test_run_loop_polls_commands_often_but_manages_rarely(self):
+        calls = {"manage": 0, "poll": 0}
+        bot = self.make_bot()
+        bot.tick = lambda commands=True: calls.__setitem__("manage", calls["manage"] + 1)
+        bot._poll_commands = lambda: calls.__setitem__("poll", calls["poll"] + 1)
+        sleeps = []
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            self.clock.now += seconds
+            if len(sleeps) == 30:
+                bot.stop()
+        bot._sleep = fake_sleep
+        bot.start = lambda: None
+        import signal
+        original = signal.signal
+        signal.signal = lambda *a: None
+        try:
+            bot.run_forever()
+        finally:
+            signal.signal = original
+        self.assertEqual(set(sleeps), {self.settings.command_poll_seconds})
+        self.assertEqual(calls["poll"], 30)                           # every 2 s ...
+        self.assertEqual(calls["manage"], 3)                          # ... but positions/scans only every 20 s
 
     def test_state_survives_restart(self):
         import tempfile, pathlib

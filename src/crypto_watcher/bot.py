@@ -72,17 +72,28 @@ class Bot:
         signal.signal(signal.SIGTERM, self.stop)
         self.start()
         try:
+            next_manage = 0.0
             while not self._stop:
-                self.tick()
-                self._sleep(self.s.manage_interval_seconds)
+                if self._clock() >= next_manage:       # positions + scans on their own, slower rhythm
+                    self.tick(commands=False)
+                    next_manage = self._clock() + self.s.manage_interval_seconds
+                self._poll_commands()                  # your Telegram commands are answered within seconds
+                self._sleep(self.s.command_poll_seconds)
         finally:
             log.info("Stopped; %d open position(s) stay protected by exchange-side stop/TP", len(self.state["trades"]))
 
     # ---- one iteration -------------------------------------------------------
-    def tick(self):
-        now = self._clock()
+    def _poll_commands(self):
         try:
             self._commands()
+        except Exception as error:  # never let a Telegram hiccup stop the trading loop
+            log.warning("Command polling failed: %s", error)
+
+    def tick(self, commands: bool = True):
+        now = self._clock()
+        try:
+            if commands:
+                self._commands()
             if self.executor:
                 self.executor.manage()
                 self._roll_day()
@@ -218,10 +229,6 @@ class Bot:
                 line += f"\nBakiye {tg.money(balance['wallet'])} USDT · açık PnL {balance['unrealized']:+.2f} (/positions)"
             except BinanceError as error:
                 line += f"\nBorsa okunamadı: {tg.esc(error)}"
-        last = self.state["last_error"]
-        if last:
-            age = max(0, int(self._clock() * 1000) - last["ms"]) // 60_000
-            line += f"\nSon sorun ({age} dk önce): {tg.esc(last['text'][:300])}"
         return line
 
 
