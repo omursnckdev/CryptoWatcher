@@ -1,0 +1,44 @@
+# CryptoWatcher ayarları. Yalnızca değiştirmek istediklerinizi bırakabilirsiniz; geri kalanı varsayılandır.
+# Tüm emirler Binance USDⓈ-M Futures TESTNET'e gider (kod başka bir adrese emir göndermeyi reddeder).
+
+# --- veri -------------------------------------------------------------
+market_data = "auto"        # auto: gerçek (mainnet) fiyat/hacim, ulaşılamazsa testnet | mainnet | testnet
+timeframe = "1h"            # sinyal mumu (yalnızca KAPANMIŞ mumlar kullanılır)
+htf = "4h"                  # üst zaman dilimi teyidi
+
+# --- evren: hacmi yeterli altcoinler ----------------------------------
+min_quote_volume = 150000000   # 24s USDT hacmi eşiği
+max_symbols = 25
+min_listing_days = 30          # yeni listelemeleri ele
+include_symbols = []           # her zaman taranacak ek semboller, örn. ["SUIUSDT"]
+
+# --- sinyal -----------------------------------------------------------
+entry_score = 70               # 0-100 normalize skor; bu ve üstü işlem adayı
+strong_score = 80
+counter_regime_penalty = 10    # BTC rejimine ters yönde eşik +10
+allow_long = true
+allow_short = true
+
+# --- risk -------------------------------------------------------------
+leverage = 5
+margin_type = "ISOLATED"
+capital_usdt = 10000           # boyutlama sermayesi = min(hesap özkaynağı, bu); 0 = hesabın tamamı
+risk_fraction = 0.01           # stop vurulursa sermayenin %1'i kaybedilir
+max_margin_fraction = 0.20     # tek pozisyona ayrılacak azami marj
+max_open_positions = 5
+max_same_direction = 3
+max_daily_loss_fraction = 0.05 # günlük gerçekleşen zarar bu orana ulaşırsa yeni işlem yok
+atr_stop_multiplier = 2.0
+tp_r = 2.0
+breakeven_r = 1.0              # +1R'de stop girişe çekilir (0 = kapalı)
+max_hold_hours = 48
+cooldown_minutes = 120
+
+# --- döngü ------------------------------------------------------------
+scan_interval_seconds = 300
+manage_interval_seconds = 20
+state_file = "state/state.json"
+
+# --- haber ------------------------------------------------------------
+news_enabled = true
+news_max_age_hours = 24
