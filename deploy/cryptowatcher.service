@@ -1,0 +1,21 @@
+# Docker kullanmadan systemd ile çalıştırma (Ubuntu/Debian). Kurulum adımları README'de.
+[Unit]
+Description=CryptoWatcher (Binance futures testnet bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cryptowatcher
+WorkingDirectory=/opt/cryptowatcher
+EnvironmentFile=/opt/cryptowatcher/.env
+ExecStart=/opt/cryptowatcher/.venv/bin/cryptowatcher run
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

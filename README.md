@@ -125,6 +125,64 @@ Başlıcaları: `leverage`, `risk_fraction`, `capital_usdt`, `max_open_positions
 `max_symbols`, `include_symbols`, `allow_long/allow_short`, `atr_stop_multiplier`, `tp_r`, `breakeven_r`, `max_hold_hours`,
 `news_enabled`, `telegram_verbose`, `notify_breakeven`. Başka bir dosya için `cryptowatcher --config yol.toml ...`.
 
+## Sunucuda 7/24 çalıştırma (bilgisayar kapalıyken)
+
+Bot yalnızca çalıştığı makine açıkken çalışır. Bilgisayarınız kapanınca durur; **açık pozisyonlar yine de korunur**, çünkü stop/TP emirleri
+borsadadır. Durunca yalnızca breakeven güncellemesi, zaman stopu, yeni işlem ve Telegram bildirimleri kesilir. Kesintisiz çalışması için
+küçük bir sanal sunucu (VPS) kiralayın: bot yalnızca dışarıya bağlanır, bir port açmanız gerekmez.
+
+**Sunucu seçimi:** Ubuntu 24.04, 1 vCPU / 1-2 GB RAM yeter (genelde ayda birkaç €/$: Hetzner, DigitalOcean, Contabo, Vultr…).
+**Konumu Avrupa seçin (Almanya/Finlandiya/Hollanda).** Binance gerçek piyasa verisini ABD veri merkezlerinden engeller (HTTP 451); bot o zaman
+anlamsız testnet verisine düşer.
+
+### Yöntem 1: Docker (önerilen)
+
+Windows PowerShell'den sunucuya bağlanın: `ssh root@SUNUCU_IP`. Sunucuda:
+
+```bash
+curl -fsSL https://get.docker.com | sh                     # Docker kurulumu
+git clone -b claude/nifty-rubin-wn484a https://github.com/omursnckdev/CryptoWatcher.git
+cd CryptoWatcher
+cp .env.example .env && nano .env                          # anahtarları doldurun (Ctrl+O, Enter, Ctrl+X)
+chmod 600 .env
+docker compose up -d --build                               # kur ve arka planda başlat
+docker compose logs -f --tail 50                           # canlı log (çıkış: Ctrl+C, bot çalışmaya devam eder)
+```
+
+`restart: unless-stopped` sayesinde bot çökerse veya sunucu yeniden başlarsa kendiliğinden açılır.
+
+| İş | Komut |
+|---|---|
+| Durum | `docker compose ps` |
+| Güncelleme | `git pull && docker compose up -d --build` |
+| Ayar değişikliği (`config/settings.toml`) | `docker compose restart` |
+| `.env` değişikliği | `docker compose up -d --force-recreate` |
+| Durdurma | `docker compose down` (pozisyonlar borsada korunur) |
+
+### Yöntem 2: Docker'sız (systemd)
+
+```bash
+apt update && apt install -y python3 python3-venv git
+useradd --system --create-home --home-dir /opt/cryptowatcher cryptowatcher
+sudo -u cryptowatcher git clone -b claude/nifty-rubin-wn484a https://github.com/omursnckdev/CryptoWatcher.git /opt/cryptowatcher/app
+cd /opt/cryptowatcher/app && sudo -u cryptowatcher bash -c 'python3 -m venv .venv && .venv/bin/pip install .'
+sudo -u cryptowatcher cp .env.example .env && nano .env && chmod 600 .env
+sed 's#/opt/cryptowatcher#/opt/cryptowatcher/app#g' deploy/cryptowatcher.service > /etc/systemd/system/cryptowatcher.service
+systemctl daemon-reload && systemctl enable --now cryptowatcher
+journalctl -u cryptowatcher -f                             # log
+```
+
+### Geçerken dikkat
+
+- **Bilgisayardaki botu kapatın.** İki bot aynı Telegram komutlarını okur (her komuta çift cevap) ve aynı hesapta çift işlem açabilir.
+- **Açık pozisyonlar:** Sunucudaki bot, bilgisayardaki botun açtığı pozisyonları tanımaz (durum dosyası `state/state.json` makineye özeldir);
+  "izlenmeyen pozisyon" olarak bırakır ve yönetmez. Ya pozisyonlar kapanana kadar bekleyip sonra geçin, ya da `state/state.json` dosyasını taşıyın:
+  `scp state\state.json root@SUNUCU_IP:/root/` sonra sunucuda `docker compose create && docker compose cp /root/state.json cryptowatcher:/app/state/state.json && docker compose up -d`.
+- **Güvenlik:** `.env` yalnızca sunucuda kalsın ve git'e eklenmesin (`.gitignore`'da). Mümkünse SSH'ı parola yerine anahtarla kullanın
+  ve `ufw allow OpenSSH && ufw enable` ile gelen bağlantıları kısıtlayın.
+- Bu Docker imajı ve systemd dosyası bu depodaki geliştirme ortamında derlenip denenemedi (orada Docker çalışmıyor); kurulum adımları temiz bir
+  Python ortamında simüle edilerek doğrulandı. Sunucuda ilk çalıştırmada `docker compose logs` ve Telegram'dan `/status` ile kontrol edin.
+
 ## Sınırlamalar ve dürüst notlar
 
 - **Testnet verisi gerçek değildir.** Testnet fiyat/hacimleri yapay (ör. küçük coinlerde milyarlarca dolarlık hacim). Bu yüzden

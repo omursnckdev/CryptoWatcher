@@ -1,0 +1,14 @@
+services:
+  cryptowatcher:
+    build: .
+    container_name: cryptowatcher
+    restart: unless-stopped          # comes back after a crash or a server reboot
+    env_file: .env                   # secrets stay on the server; they are not baked into the image
+    volumes:
+      - cw-state:/app/state          # open-trade state survives restarts and rebuilds
+      - ./config:/app/config:ro      # edit config/settings.toml, then `docker compose restart`
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  cw-state:
