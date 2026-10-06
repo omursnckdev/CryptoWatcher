@@ -12,6 +12,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 import requests
+from .net import make_session
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ class NewsService:
     def __init__(self, feeds, max_age_hours: float = 24.0, cache_minutes: int = 10, session=None,
                  clock=time.time, aliases=ALIASES, timeout: float = 10.0):
         self.feeds, self.max_age_hours, self.cache_seconds = tuple(feeds), max_age_hours, cache_minutes * 60
-        self.session, self._clock, self.aliases, self.timeout = session or requests.Session(), clock, aliases, timeout
+        self.session, self._clock, self.aliases, self.timeout = session or make_session(), clock, aliases, timeout
         self._items: list[Headline] = []
         self._fetched = float("-inf")
         self.last_errors: list[str] = []

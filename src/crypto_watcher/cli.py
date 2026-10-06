@@ -68,6 +68,8 @@ def cmd_check(args, settings, secrets) -> int:
     from .news import NewsService
     from .telegram import TelegramNotifier
     ok = True
+    from .net import trust_source
+    print(f"• TLS sertifika kaynağı: {trust_source()}")
 
     def line(good: bool | None, text: str):
         nonlocal ok

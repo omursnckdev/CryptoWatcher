@@ -183,6 +183,14 @@ journalctl -u cryptowatcher -f                             # log
 - Bu Docker imajı ve systemd dosyası bu depodaki geliştirme ortamında derlenip denenemedi (orada Docker çalışmıyor); kurulum adımları temiz bir
   Python ortamında simüle edilerek doğrulandı. Sunucuda ilk çalıştırmada `docker compose logs` ve Telegram'dan `/status` ile kontrol edin.
 
+## Sorun giderme
+
+**`CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`** (Windows'ta sık görülür): Python'un kendi sertifika listesi
+eski ya da antivirüs/kurumsal ağ kendi sertifikasını yalnızca Windows'a eklemiştir. Bot artık Windows'un sertifika deposunu kullanır
+(`truststore`); güncellemek için `git pull` ve `python -m pip install -e .` yeterlidir. Doğrulama hiçbir zaman kapatılmaz.
+`cryptowatcher check` hangi sertifika kaynağının kullanıldığını ilk satırda gösterir. Sorun sürerse antivirüsün "HTTPS taraması"nı
+Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi` deneyin.
+
 ## Sınırlamalar ve dürüst notlar
 
 - **Testnet verisi gerçek değildir.** Testnet fiyat/hacimleri yapay (ör. küçük coinlerde milyarlarca dolarlık hacim). Bu yüzden
@@ -201,7 +209,7 @@ journalctl -u cryptowatcher -f                             # log
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 91 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 96 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

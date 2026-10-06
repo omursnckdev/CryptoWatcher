@@ -495,6 +495,47 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(secrets.telegram_allowed_users, ("12", "34"))
 
 
+class NetTests(unittest.TestCase):
+    def test_session_uses_system_trust_store_and_falls_back_to_default(self):
+        from unittest import mock
+        from crypto_watcher import net
+        if net.truststore is not None:
+            session = net.make_session()
+            adapter = session.get_adapter("https://example.com")
+            self.assertIsInstance(adapter, net._SystemTrustAdapter)
+            self.assertIs(type(adapter.poolmanager.connection_pool_kw["ssl_context"]), net.truststore.SSLContext)
+            self.assertTrue(session.verify)
+        with mock.patch.object(net, "truststore", None):
+            session = net.make_session()
+            self.assertNotIsInstance(session.get_adapter("https://example.com"), net._SystemTrustAdapter)
+            self.assertEqual(net.trust_source(), "certifi bundle")
+
+    def test_certificate_verification_is_still_enforced(self):
+        import http.server, shutil, ssl, subprocess, threading
+        from crypto_watcher import net
+        if not shutil.which("openssl"):
+            self.skipTest("openssl not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            key, crt = Path(tmp, "k.pem"), Path(tmp, "c.pem")
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(crt),
+                            "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+                           check=True, capture_output=True)
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+                def log_message(self, *args): pass
+            server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(crt, key)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                with self.assertRaises(requests.exceptions.SSLError):   # self-signed: must be rejected
+                    net.make_session().get(f"https://127.0.0.1:{server.server_port}/", timeout=5)
+            finally:
+                server.shutdown()
+
+
 class StateTests(unittest.TestCase):
     def test_atomic_roundtrip_and_history_limit(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,6 +10,7 @@ import hmac
 import logging
 import time
 import requests
+from .net import make_session
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def round_step(value: float, step: float, rounding=ROUND_DOWN) -> float:
 class MarketClient:
     def __init__(self, base_url: str = MAINNET_URL, session=None, timeout: float = 15.0, sleep=time.sleep):
         self.base_url = base_url.rstrip("/")
-        self.session = session or requests.Session()
+        self.session = session or make_session()
         self.timeout = timeout
         self._sleep = sleep
 

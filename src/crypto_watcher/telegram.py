@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import requests
+from .net import make_session
 
 log = logging.getLogger(__name__)
 LIMIT = 4000  # Telegram caps messages at 4096 characters
@@ -43,7 +44,7 @@ class TelegramNotifier:
 
     def __init__(self, token: str = "", chat_id: str = "", session=None, sleep=time.sleep, timeout: float = 15.0):
         self.token, self.chat_id = token, str(chat_id)
-        self.session, self._sleep, self.timeout = session or requests.Session(), sleep, timeout
+        self.session, self._sleep, self.timeout = session or make_session(), sleep, timeout
         self.sent: list[str] = []
         self._rejected = False
         self.username = ""
