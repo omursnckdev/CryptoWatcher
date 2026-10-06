@@ -66,6 +66,9 @@ class Settings:
     scan_interval_seconds: int = 300
     manage_interval_seconds: int = 20
     state_file: str = "state/state.json"
+    # --- telegram ----------------------------------------------------
+    telegram_verbose: bool = False     # add reasons, headlines, margin and liquidation price to messages
+    notify_breakeven: bool = True      # message when a trade is revised (stop moved to breakeven)
     # --- news --------------------------------------------------------
     news_enabled: bool = True
     news_feeds: tuple[str, ...] = DEFAULT_FEEDS
@@ -145,6 +148,7 @@ class Secrets:
     api_secret: str = ""
     telegram_token: str = ""
     telegram_chat_id: str = ""
+    telegram_allowed_users: tuple[str, ...] = ()   # user ids allowed to /pause and /resume from a group
 
     @property
     def has_binance(self) -> bool:
@@ -175,4 +179,5 @@ def load_secrets(env_file: Path | None = Path(".env"), environ=None) -> Secrets:
     return Secrets(api_key=merged.get("BINANCE_TESTNET_API_KEY", ""),
                    api_secret=merged.get("BINANCE_TESTNET_API_SECRET", ""),
                    telegram_token=merged.get("TELEGRAM_BOT_TOKEN", ""),
-                   telegram_chat_id=str(merged.get("TELEGRAM_CHAT_ID", "")))
+                   telegram_chat_id=str(merged.get("TELEGRAM_CHAT_ID", "")),
+                   telegram_allowed_users=tuple(u.strip() for u in merged.get("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if u.strip()))

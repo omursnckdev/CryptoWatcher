@@ -39,6 +39,11 @@ scan_interval_seconds = 300
 manage_interval_seconds = 20
 state_file = "state/state.json"
 
+# --- telegram ---------------------------------------------------------
+# Bot yalnızca işlem açıldığında/kapandığında/revize edildiğinde (stop başa çekilince) ve komut yazınca mesaj atar.
+telegram_verbose = false       # true: mesajlara gerekçe, haber başlığı, marj ve tasfiye fiyatı da eklenir
+notify_breakeven = true        # false: stop başa çekilince mesaj atma
+
 # --- haber ------------------------------------------------------------
 news_enabled = true
 news_max_age_hours = 24

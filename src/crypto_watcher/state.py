@@ -9,7 +9,7 @@ HISTORY_LIMIT = 50
 
 def default_state() -> dict:
     return {"trades": {}, "cooldowns": {}, "daily": {}, "history": [], "signaled": {}, "paused": False,
-            "tg_offset": 0, "alerts": {},
+            "tg_offset": 0, "alerts": {}, "last_error": None,
             "totals": {"trades": 0, "wins": 0, "realized": 0.0}}
 
 

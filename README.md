@@ -77,28 +77,54 @@ funding, ATR bandı dışı, sinyal mumundan beri fiyat > 1 ATR kaymış, aleyht
 - +1R'de stop, komisyonu karşılayacak şekilde girişin hemen ötesine çekilir (önce yeni stop konur, sonra eskisi iptal edilir);
   48 saat sonra zaman stopu.
 
-## Telegram bildirimleri
+## Telegram
 
-Her işlem Türkçe bildirilir: 🟢 LONG / 🔴 SHORT açıldı (kaldıraç, giriş, miktar, stop, hedef, marj, risk, skor, gerekçeler, haber başlıkları),
-🛡 stop başa çekildi, ✅/❌ pozisyon kapandı (sebep: stop / TP / başa baş / zaman / dış müdahale; net PnL, R katı, komisyon, süre),
-⚠️ uyarılar (emir hataları, korumasız pozisyon, izlenmeyen pozisyon), 📊 günlük özet.
+**Bot yalnızca iki durumda mesaj atar:** (1) siz bir komut yazınca, (2) bir işlem **açıldığında, kapandığında veya revize edildiğinde**
+(stop başa çekilince / yeniden konunca). Başlangıç-durdurma mesajı, günlük özet ve hata uyarısı gönderilmez; hatalar log'a yazılır
+ve `/status` içinde "Son sorun" olarak görünür. Tek istisna korumasız kalan pozisyon gibi güvenlik uyarılarıdır.
+(`run --dry-run` modunda emir olmadığından, "açılacak" işlemler her mumda tek bir özet mesajında gelir.)
 
-Komutlar (yalnızca `TELEGRAM_CHAT_ID` sahibinden kabul edilir; bot **çalışırken** cevap verir, Telegram'daki `/` menüsüne otomatik eklenir):
+```
+🟢 LONG SOLUSDT 5x @ 150.20 · skor 84
+SL 147.0 (-2.1%) · TP 156.8 (+4.4%) · risk 100 USDT · 📰 +0.3 (3)
+
+🛡 SOLUSDT stop başa baş: 150.35
+
+✅ SOLUSDT LONG kapandı · hedef
+150.20 → 156.80 · +195.30 USDT (+1.9R) · 3sa 12dk
+```
+`telegram_verbose = true` yaparsanız açılış mesajına gerekçeler, haber başlıkları, marj ve funding da eklenir.
+
+Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomatik eklenir):
 
 | Komut | Ne gösterir |
 |---|---|
-| `/positions` (`/pozisyon`) | Açık pozisyonlar: giriş → anlık fiyat, PnL (USDT), ROE, R katı, stop/hedef, tasfiye fiyatı, süre, toplam gerçekleşmemiş |
-| `/pnl` (`/kar`) | Bugün gerçekleşen + açık pozisyonların gerçekleşmemiş PnL'i, tüm zamanlar toplamı ve isabet oranı, son 5 işlem |
-| `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
+| `/positions` (`/pozisyon`) | Açık pozisyonlar, pozisyon başına 2 satır: PnL (USDT, %, R), giriş → anlık fiyat, SL/TP, süre; toplam açık PnL |
+| `/pnl` (`/kar`) | Bugün (kapanan + açık), tüm zamanlar, isabet oranı, son 5 işlem |
+| `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi, son sorun |
 | `/top` | En yüksek skorlu 5 coin |
 | `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
+
+### Grupta kullanma
+
+1. Botu gruba ekleyin. Gruba bir mesaj yazın, örneğin `/status@BOT_ADINIZ`.
+2. `cryptowatcher telegram-id` çalıştırın: gruplar ve kullanıcı id'leri listelenir. Grup id'si **negatiftir** (`-100...`);
+   `.env` içinde `TELEGRAM_CHAT_ID=` satırına onu yazın (kişisel id'niz değil).
+3. **Gizlilik modu:** Telegram gruplarda botlara varsayılan olarak yalnızca `/komut@bot_adı` biçimindeki komutları iletir.
+   Menüden seçince bu ek otomatik gelir; elle yazarken `/positions@BOT_ADINIZ` yazın. Düz `/positions` yazabilmek için
+   @BotFather → `/setprivacy` → botu seçin → **Disable**, ardından botu gruptan çıkarıp **yeniden ekleyin** (ayar yeni eklenmede geçerli olur).
+4. Gruptaki herkes okuma komutlarını kullanabilir; `/pause` ve `/resume` yalnızca `.env` içindeki
+   `TELEGRAM_ALLOWED_USER_IDS` listesindeki kullanıcılara açıktır (listeyi `telegram-id` çıktısından alın).
+5. Grup "supergroup"a yükseltilirse id değişir; bot log'da yeni id'yi yazar, `.env`'yi güncelleyin.
+
+Bot yalnızca `TELEGRAM_CHAT_ID`'deki sohbeti dinler ve oraya yazar; başka sohbetlerden gelen komutları yok sayar.
 
 ## Ayarlar
 
 `config/settings.toml` (hepsi isteğe bağlı; varsayılanlar kod içinde). Hatalı değerler başlangıçta reddedilir.
 Başlıcaları: `leverage`, `risk_fraction`, `capital_usdt`, `max_open_positions`, `entry_score`, `min_quote_volume`,
 `max_symbols`, `include_symbols`, `allow_long/allow_short`, `atr_stop_multiplier`, `tp_r`, `breakeven_r`, `max_hold_hours`,
-`news_enabled`. Başka bir dosya için `cryptowatcher --config yol.toml ...`.
+`news_enabled`, `telegram_verbose`, `notify_breakeven`. Başka bir dosya için `cryptowatcher --config yol.toml ...`.
 
 ## Sınırlamalar ve dürüst notlar
 
@@ -118,7 +144,7 @@ Başlıcaları: `leverage`, `risk_fraction`, `capital_usdt`, `max_open_positions
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 83 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 91 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

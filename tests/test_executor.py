@@ -11,9 +11,10 @@ from helpers import Clock, FakeExchange, make_infos
 
 
 class Notifier(TelegramNotifier):
+    """Commands are queued as "/cmd" (sent by user "1") or ("/cmd", "user")."""
     def poll(self, offset):
         commands, self.commands = getattr(self, "commands", []), []
-        return commands, offset
+        return [c if isinstance(c, tuple) else (c, "1") for c in commands], offset
 
 
 class Base(unittest.TestCase):
@@ -66,7 +67,8 @@ class OpenTests(Base):
         self.assertIn(("margin", "DOGEUSDT", "ISOLATED"), self.ex.calls)
         self.assertIn(("leverage", "DOGEUSDT", 5), self.ex.calls)
         text = self.messages()
-        self.assertIn("LONG AÇILDI", text)
+        self.assertIn("LONG DOGEUSDT", text)
+        self.assertLessEqual(len(text.splitlines()), 2)   # compact: two lines
         self.assertIn("DOGEUSDT", text)
 
     def test_open_short_is_mirrored(self):
@@ -76,7 +78,7 @@ class OpenTests(Base):
         self.assertEqual(algos["STOP_MARKET"]["side"], "BUY")
         self.assertGreater(algos["STOP_MARKET"]["triggerPrice"], trade["entry"])
         self.assertLess(algos["TAKE_PROFIT_MARKET"]["triggerPrice"], trade["entry"])
-        self.assertIn("SHORT AÇILDI", self.messages())
+        self.assertIn("SHORT XRPUSDT", self.messages())
 
     def test_client_ids_are_unique_per_symbol_even_in_the_same_millisecond(self):
         from crypto_watcher.executor import client_id
@@ -104,7 +106,7 @@ class OpenTests(Base):
         trade = self.open("DOGEUSDT")
         self.assertIsNone(trade["tp_id"])
         self.assertIn("DOGEUSDT", self.ex.pos)
-        self.assertIn("take-profit emri konulamadı", self.messages())
+        self.assertIn("TP konulamadı", self.messages())
 
     def test_leverage_falls_back_when_symbol_limit_is_lower(self):
         self.ex.reject_leverage_above = 2
@@ -170,7 +172,8 @@ class LifecycleTests(Base):
         self.assertEqual(self.state["history"][-1]["reason"], "TAKE_PROFIT")
         self.assertGreater(self.state["daily"]["realized"], 0)
         self.assertGreater(self.state["cooldowns"]["DOGEUSDT"], self.clock())
-        self.assertIn("Take-profit", self.messages())
+        self.assertIn("DOGEUSDT LONG kapandı", self.messages())
+        self.assertIn("hedef", self.messages())
         self.assertIn("✅", self.messages())
 
     def test_stop_loss_is_a_loss_near_minus_one_r(self):
@@ -193,7 +196,7 @@ class LifecycleTests(Base):
         self.assertGreater(trade["stop"], trade["entry"])
         order = [c[0] + ":" + c[-1] for c in self.ex.calls if c[0] in ("algo", "cancel_algo")]
         self.assertLess(order.index(f"algo:{trade['sl_id']}"), order.index(f"cancel_algo:{old_id}"))
-        self.assertIn("BAŞA BAŞA", self.messages())
+        self.assertIn("stop başa baş", self.messages())
         new = self.ex.algos[trade["sl_id"]]
         self.assertFalse(new["closePosition"])               # coexists with the closePosition stop (-4130 otherwise)
         self.assertEqual(new["quantity"], trade["quantity"])
@@ -228,7 +231,7 @@ class LifecycleTests(Base):
         self.executor.manage()
         self.assertEqual(self.ex.pos, {})
         self.assertEqual(self.state["history"][-1]["reason"], "TIME_STOP")
-        self.assertIn("Zaman stopu", self.messages())
+        self.assertIn("zaman stopu", self.messages())
 
     def test_external_close_is_reported_as_external(self):
         trade = self.open("DOGEUSDT")
@@ -246,7 +249,7 @@ class LifecycleTests(Base):
             self.assertIn("DOGEUSDT", self.state["trades"])
         self.executor.manage()
         self.assertEqual(self.state["trades"], {})
-        self.assertIn("PnL: alınamadı", self.messages())
+        self.assertIn("PnL alınamadı", self.messages())
         self.assertEqual(self.state["daily"]["trades"], 0)
 
     def test_reconcile_restores_missing_stop(self):
@@ -256,7 +259,7 @@ class LifecycleTests(Base):
         self.executor.reconcile()
         live = self.ex.open_algo_orders("DOGEUSDT")
         self.assertEqual({a["orderType"] for a in live}, {"STOP_MARKET", "TAKE_PROFIT_MARKET"})
-        self.assertIn("stop emri eksikti", self.messages())
+        self.assertIn("stop yeniden kondu", self.messages())
 
     def test_reconcile_finalizes_trades_closed_while_offline(self):
         trade = self.open("DOGEUSDT")
@@ -267,7 +270,8 @@ class LifecycleTests(Base):
     def test_unmanaged_position_is_flagged_not_touched(self):
         self.ex.pos["ADAUSDT"] = {"amt": 10.0, "entry": self.prices["ADAUSDT"]}
         self.executor.reconcile()
-        self.assertIn("ADAUSDT", self.messages())
+        self.assertNotIn("ADAUSDT", self.messages())              # not pushed to Telegram...
+        self.assertIn("ADAUSDT", self.state["last_error"]["text"])  # ...but visible in /status
         self.assertEqual(self.ex.kinds("market"), [])
 
 
@@ -293,11 +297,13 @@ class BotTests(Base):
         bot.tick()
         self.assertEqual(self.ex.kinds("market"), [])
         self.assertEqual(self.ex.kinds("algo"), [])
-        signals = [m for m in self.notifier.sent if "SİNYALİ" in m]
-        self.assertEqual(len(signals), 3)
+        digests = [m for m in self.notifier.sent if "sinyal" in m]
+        self.assertEqual(len(digests), 1)                       # one digest, not one message per coin
+        self.assertIn("3 sinyal", digests[0])
+        self.assertIn("DOGEUSDT", digests[0])
         self.clock.now += 400
         bot.tick()
-        self.assertEqual(len([m for m in self.notifier.sent if "SİNYALİ" in m]), 3)
+        self.assertEqual(len([m for m in self.notifier.sent if "sinyal" in m]), 1)  # same candle: silent
 
     def test_paused_bot_opens_nothing_and_commands_work(self):
         bot = self.make_bot()
@@ -309,7 +315,7 @@ class BotTests(Base):
         self.clock.now += 400
         bot.tick()
         text = self.messages()
-        for expected in ("Durum", "En yüksek skorlar", "Kâr / Zarar", "Açık pozisyon yok", "Komutlar"):
+        for expected in ("DURAKLATILDI", "En yüksek skorlar", "Bugün", "Açık pozisyon yok", "Komutlar"):
             self.assertIn(expected, text)
         self.notifier.commands = ["/resume"]
         self.clock.now += 400
@@ -325,18 +331,15 @@ class BotTests(Base):
         self.ex.move("XRPUSDT", short_t["entry"] + 0.5 * short_t["risk_distance"])      # short is losing 0.5R
         self.clock.now += 3600 + 600
         reply = bot._answer("/positions")
-        self.assertIn("Açık pozisyonlar (3)", reply)
         self.assertIn("DOGEUSDT", reply)
-        self.assertIn("+0.50R", reply)
-        self.assertIn("-0.50R", reply)
-        self.assertIn("1sa 10dk", reply)
-        self.assertIn("Anlık", reply)
-        expected = (long_t["quantity"] * 0.5 * long_t["risk_distance"]) - (short_t["quantity"] * 0.5 * short_t["risk_distance"])
-        btc = self.state["trades"]["BTCUSDT"]
-        self.assertIn("Toplam gerçekleşmemiş", reply)
+        self.assertIn("+0.5R", reply)
+        self.assertIn("-0.5R", reply)
+        self.assertIn("1sa10dk", reply)
+        self.assertIn("Toplam açık", reply)
         self.assertEqual(bot._answer("/pozisyon"), reply)  # Turkish alias
-        self.assertIn("Stop", reply)
-        self.assertIn("Hedef", reply)
+        self.assertIn("SL", reply)
+        self.assertIn("TP", reply)
+        self.assertEqual(len(reply.splitlines()), 3 * 2 + 1)   # two lines per position + total
 
     def test_pnl_command_combines_realized_unrealized_and_lifetime(self):
         bot = self.make_bot()
@@ -347,12 +350,11 @@ class BotTests(Base):
         xrp = self.state["trades"]["XRPUSDT"]
         self.ex.move("XRPUSDT", xrp["entry"] - 0.4 * xrp["risk_distance"])   # short in profit, unrealized
         reply = bot._answer("/pnl")
-        self.assertIn("Bugün gerçekleşen: <b>+", reply)
-        self.assertIn("(1 işlem, 1 kazanan)", reply)
-        self.assertIn("gerçekleşmemiş", reply)
+        self.assertIn("kapanan +", reply)
+        self.assertIn("açık +", reply)
         self.assertIn("Tüm zamanlar", reply)
         self.assertIn("isabet %100", reply)
-        self.assertIn("DOGEUSDT LONG", reply)                    # recent trades list
+        self.assertIn("✅DOGE +", reply)                          # recent trades list
         self.assertEqual(self.state["totals"]["trades"], 1)
         self.assertGreater(self.state["totals"]["realized"], 0)
         self.assertEqual(bot._answer("/kar"), reply)
@@ -365,6 +367,52 @@ class BotTests(Base):
         self.ex.positions = lambda symbol=None: (_ for _ in ()).throw(BinanceError("down", -1000, 500))
         self.assertIn("Borsa okunamadı", live._answer("/positions"))
         self.assertIn("Borsa okunamadı", live._answer("/pnl"))
+
+    def test_telegram_is_silent_except_for_trades_and_commands(self):
+        bot = self.make_bot()
+        self.assertEqual(self.notifier.sent, [])                 # no "started" message
+        bot.tick()
+        opened = len(self.notifier.sent)
+        self.assertEqual(opened, 3)                              # exactly one message per opened trade
+        self.ex.positions = lambda symbol=None: (_ for _ in ()).throw(BinanceError("api down", -1000, 500))
+        for _ in range(3):
+            self.clock.now += 400
+            bot.tick()
+        self.clock.now += 86_400                                 # day rollover, daily-loss, errors: all silent
+        bot.tick()
+        self.assertEqual(len(self.notifier.sent), opened)
+
+    def test_breakeven_message_can_be_disabled(self):
+        quiet = Settings(min_quote_volume=1.0, notify_breakeven=False)
+        executor = Executor(self.ex, quiet, self.state, self.notifier, make_infos(self.symbols), self.clock)
+        executor.roll_day(15_000.0)
+        trade = executor.open_trade(self.cands["DOGEUSDT"])
+        sent = len(self.notifier.sent)
+        self.ex.move("DOGEUSDT", trade["entry"] + 1.1 * trade["risk_distance"])
+        executor.manage()
+        self.assertTrue(trade["breakeven_done"])
+        self.assertEqual(len(self.notifier.sent), sent)
+
+    def test_group_chat_authorisation(self):
+        self.notifier.chat_id = "-1001234567"
+        bot = Bot(self.settings, self.demo, "demo", None, self.notifier, self.state, self.executor, self.ex, None, self.clock,
+                  sleep=lambda s: None, allowed_users=("42",))
+        bot.start()
+        self.notifier.commands = [("/status", "999"), ("/pause", "999")]       # a random group member
+        bot._commands()
+        self.assertFalse(self.state["paused"])
+        self.assertIn("yetkiniz yok", self.notifier.sent[-1])
+        self.assertIn("aktif", self.notifier.sent[-2])                          # read-only command works for anyone
+        self.notifier.commands = [("/pause", "42")]                             # an allowed user
+        bot._commands()
+        self.assertTrue(self.state["paused"])
+
+    def test_private_chat_owner_may_control(self):
+        bot = self.make_bot()
+        self.notifier.chat_id = "123"
+        self.notifier.commands = [("/pause", "123")]
+        bot._commands()
+        self.assertTrue(self.state["paused"])
 
     def test_command_menu_is_registered_when_configured(self):
         class Session:
@@ -384,7 +432,8 @@ class BotTests(Base):
         bot = self.make_bot()
         self.ex.positions = lambda symbol=None: (_ for _ in ()).throw(BinanceError("boom", -1000, 500))
         bot.tick()  # must not raise
-        self.assertIn("boom", self.messages())
+        self.assertNotIn("boom", self.messages())               # errors are not pushed...
+        self.assertIn("boom", bot._answer("/status"))           # ...but /status shows them
 
     def test_state_survives_restart(self):
         import tempfile, pathlib

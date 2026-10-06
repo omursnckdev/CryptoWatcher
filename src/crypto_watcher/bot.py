@@ -24,11 +24,12 @@ HELP = ("Komutlar:\n/positions (/pozisyon): açık pozisyonlar, anlık fiyat ve 
 class Bot:
     def __init__(self, settings: Settings, provider, source: str, source_warning: str | None, notifier,
                  state: StateStore, executor=None, venue: MarketClient | None = None, news: NewsService | None = None,
-                 clock=time.time, sleep=time.sleep):
+                 clock=time.time, sleep=time.sleep, allowed_users: tuple[str, ...] = ()):
         self.s, self.provider, self.source, self.warning = settings, provider, source, source_warning
         self.notify, self.state, self.executor = notifier, state, executor
         self.venue = venue or MarketClient(TESTNET_URL)
         self.news, self._clock, self._sleep = news, clock, sleep
+        self.allowed_users = tuple(allowed_users)
         self.infos, self.universe, self.report = {}, [], None
         self._universe_at = self._scan_at = self._manage_at = 0.0
         self._stop = False
@@ -44,13 +45,15 @@ class Bot:
             self.executor.infos = self.infos
             self.executor.prepare()
         self._refresh_universe(force=True)
+        self.notify.username = self.notify.whoami() if self.notify.configured else ""
         self.notify.set_commands(MENU)
         balance = None
         if self.executor:
             balance = self.executor.balance()
             self.executor.roll_day(balance["wallet"] + balance["unrealized"])
             self.executor.reconcile()
-        self.notify.send(tg.fmt_start(self.s, self.universe, self.source, self.dry_run, balance, self.warning))
+        log.info("Started (%s, %d symbols, source %s)%s", "dry-run" if self.dry_run else "testnet", len(self.universe),
+                 self.source, f"; {self.warning}" if self.warning else "")
 
     def _refresh_universe(self, force: bool = False):
         now = self._clock()
@@ -73,9 +76,7 @@ class Bot:
                 self.tick()
                 self._sleep(self.s.manage_interval_seconds)
         finally:
-            open_count = len(self.state["trades"])
-            self.notify.send(f"🛑 <b>CryptoWatcher durduruldu.</b> Açık pozisyon: {open_count}"
-                             + (" (borsada stop/TP emirleriyle korunuyor)" if open_count else ""))
+            log.info("Stopped; %d open position(s) stay protected by exchange-side stop/TP", len(self.state["trades"]))
 
     # ---- one iteration -------------------------------------------------------
     def tick(self):
@@ -94,19 +95,16 @@ class Bot:
             log.exception("Tick failed")
             self._error(type(error).__name__, error)
 
-    def _error(self, key: str, error: Exception):
-        last = self.state["alerts"].get(key, 0)
-        if self._clock() - last >= 1800:
-            self.state["alerts"][key] = self._clock()
-            self.notify.send(tg.fmt_warning(f"{type(error).__name__}: {error}"))
+    def _error(self, key: str, error: Exception, every: int | None = None):
+        """Loop errors are logged and shown by /status; Telegram stays quiet."""
+        log.warning("%s: %s", key, error)
+        self.state["last_error"] = {"text": f"{type(error).__name__}: {error}", "ms": int(self._clock() * 1000)}
 
     def _roll_day(self):
         if not self.executor.new_day():
             return
         balance = self.executor.balance()
-        finished = self.executor.roll_day(balance["wallet"] + balance["unrealized"])
-        if finished:
-            self.notify.send(tg.fmt_daily(finished))
+        self.executor.roll_day(balance["wallet"] + balance["unrealized"])
 
     def _scan_and_trade(self):
         self._refresh_universe()
@@ -114,22 +112,19 @@ class Bot:
         if self.executor:
             capital = self.executor.capital()
             if self.executor.daily_loss_locked():
-                self._error("daily_loss", RuntimeError("Günlük zarar limiti doldu: yeni işlem açılmayacak."))
+                self._error("daily_loss", RuntimeError("Günlük zarar limiti doldu: yeni işlem açılmayacak."), every=86400)
         report = scan(self.provider, self.s, self.universe, capital, self.news, int(self._clock() * 1000), self.source)
         self.report = report
         for error in report["errors"]:
             log.warning("Scan error %s: %s", error["symbol"], error["error"])
+        fresh = []
         for candidate in sorted(actionable(report), key=lambda c: -c["score"]):
             symbol = candidate["symbol"]
             if self.state["signaled"].get(symbol) == candidate["date"]:
                 continue  # one attempt per symbol per candle
             if self.dry_run:
-                plan = candidate["sides"][candidate["side"]]["risk_plan"]
                 self.state["signaled"][symbol] = candidate["date"]
-                self.notify.send(tg.fmt_open({"symbol": symbol, "side": candidate["side"], "leverage": plan["leverage"],
-                                              "entry": plan["entry"], "quantity": plan["quantity"], "stop": plan["stop"],
-                                              "take_profit": plan["take_profit"], "planned_risk": plan["planned_risk"],
-                                              "risk_reward": plan["risk_reward"]}, candidate, dry_run=True))
+                fresh.append(candidate)
                 continue
             reason = self.executor.can_open(candidate)
             if reason:
@@ -137,16 +132,29 @@ class Bot:
                 continue
             self.executor.open_trade(candidate)
             self.state["signaled"][symbol] = candidate["date"]
+        if fresh:  # one digest per scan instead of one message per coin
+            self.notify.send(tg.fmt_signals(fresh))
         self.state.save()
 
     # ---- telegram commands -----------------------------------------------------
+    CONTROL = ("/pause", "/resume")
+
     def _commands(self):
         commands, offset = self.notify.poll(self.state["tg_offset"])
         if offset != self.state["tg_offset"]:
             self.state["tg_offset"] = offset
             self.state.save()
-        for command in commands:
-            self.notify.send(self._answer(command))
+        for command, user in commands:
+            self.notify.send(self._answer(command) if self._may(command, user) else
+                             "⛔ Bu komut için yetkiniz yok. Grupta /pause ve /resume için kullanıcı id'nizi "
+                             "TELEGRAM_ALLOWED_USER_IDS içine ekleyin (`cryptowatcher telegram-id`).")
+
+    def _may(self, command: str, user: str) -> bool:
+        """Private chat: its owner may do everything. Group: anyone may read, only allowed users may control."""
+        command = ALIASES.get(command, command)
+        if command not in self.CONTROL or not self.notify.chat_id.startswith("-"):
+            return True
+        return user in self.allowed_users
 
     def _answer(self, command: str) -> str:
         command = ALIASES.get(command, command)
@@ -184,7 +192,7 @@ class Bot:
         if self.dry_run:
             return "ℹ️ DRY-RUN modunda emir gönderilmediği için açık pozisyon yok."
         rows, balance = self._live_rows()
-        return tg.fmt_positions(rows, balance, int(self._clock() * 1000))
+        return tg.fmt_positions(rows, balance, int(self._clock() * 1000), self.s.telegram_verbose)
 
     def _pnl(self) -> str:
         daily = self.state["daily"] or {"date": "-"}
@@ -196,19 +204,20 @@ class Bot:
 
     def _status(self) -> str:
         trades = self.state["trades"]
-        lines = [f"ℹ️ <b>Durum</b>{' (DRY-RUN)' if self.dry_run else ''}: {'DURAKLATILDI' if self.state['paused'] else 'aktif'} · "
-                 f"açık pozisyon {len(trades)}/{self.s.max_open_positions}"]
+        line = (f"ℹ️ {'DURAKLATILDI' if self.state['paused'] else 'aktif'}{' (dry-run)' if self.dry_run else ''} · "
+                f"{len(trades)}/{self.s.max_open_positions} pozisyon")
         if self.report:
-            lines.append(f"BTC rejimi {tg.esc(self.report['market_regime'])} · veri {tg.esc(self.source)} · evren {len(self.universe)}")
+            line += f" · BTC {tg.esc(self.report['market_regime'])} · {len(self.universe)} coin · veri {tg.esc(self.source)}"
         if self.executor:
             try:
                 balance = self.executor.balance()
-                lines.append(f"Bakiye {tg.money(balance['wallet'])} USDT · gerçekleşmemiş {balance['unrealized']:+.2f}")
+                line += f"\nBakiye {tg.money(balance['wallet'])} USDT · açık PnL {balance['unrealized']:+.2f} (/positions)"
             except BinanceError as error:
-                lines.append(f"Borsa okunamadı: {tg.esc(error)}")
-            if trades:
-                lines.append("Ayrıntı için /positions")
-        return "\n".join(lines)
+                line += f"\nBorsa okunamadı: {tg.esc(error)}"
+        last = self.state["last_error"]
+        if last:
+            line += f"\nSon sorun ({tg.now_utc_text(last['ms'])}): {tg.esc(last['text'][:160])}"
+        return line
 
 
 def build_bot(settings: Settings, secrets, dry_run: bool, session=None, state_path=None) -> Bot:
@@ -221,9 +230,11 @@ def build_bot(settings: Settings, secrets, dry_run: bool, session=None, state_pa
         if settings.news_enabled else None
     cached = CachedProvider(provider)
     if dry_run:
-        return Bot(settings, cached, source, warning, notifier, state, None, MarketClient(TESTNET_URL, session=session), news)
+        return Bot(settings, cached, source, warning, notifier, state, None, MarketClient(TESTNET_URL, session=session), news,
+               allowed_users=secrets.telegram_allowed_users)
     if not secrets.has_binance:
         raise ValueError("BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET missing (see .env.example); use --dry-run to try without keys")
     client = TradingClient(secrets.api_key, secrets.api_secret, session=session)
     executor = Executor(client, settings, state, notifier, {})
-    return Bot(settings, cached, source, warning, notifier, state, executor, client, news)
+    return Bot(settings, cached, source, warning, notifier, state, executor, client, news,
+               allowed_users=secrets.telegram_allowed_users)

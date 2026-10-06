@@ -447,13 +447,41 @@ class TelegramTests(unittest.TestCase):
         self.assertNotIn("TOKEN", "\n".join(logs.output))
         self.assertFalse(TelegramNotifier().send("unconfigured"))
 
-    def test_poll_accepts_only_the_authorised_chat(self):
+    def test_poll_accepts_only_the_authorised_chat_and_this_bot(self):
         updates = {"ok": True, "result": [
-            {"update_id": 10, "message": {"chat": {"id": 1}, "text": "/status@MyBot extra"}},
-            {"update_id": 11, "message": {"chat": {"id": 999}, "text": "/pause"}},
-            {"update_id": 12, "message": {"chat": {"id": 1}, "text": "hello"}}]}
+            {"update_id": 10, "message": {"chat": {"id": 1}, "from": {"id": 7}, "text": "/status@MyBot extra"}},
+            {"update_id": 11, "message": {"chat": {"id": 999}, "from": {"id": 8}, "text": "/pause"}},
+            {"update_id": 12, "message": {"chat": {"id": 1}, "from": {"id": 7}, "text": "hello"}},
+            {"update_id": 13, "message": {"chat": {"id": 1}, "from": {"id": 7}, "text": "/pause@OtherBot"}},
+            {"update_id": 14, "message": {"chat": {"id": 1}, "from": {"id": 9}, "text": "/PNL"}}]}
         notifier = TelegramNotifier("T", "1", session=FakeSession([Resp(updates)]))
-        self.assertEqual(notifier.poll(0), (["/status"], 13))
+        notifier.username = "mybot"
+        self.assertEqual(notifier.poll(0), ([("/status", "7"), ("/pnl", "9")], 15))
+
+    def test_group_chat_ids_are_negative_strings_and_discovery(self):
+        updates = {"ok": True, "result": [
+            {"update_id": 1, "message": {"chat": {"id": 55, "type": "private", "first_name": "Ömer"}, "from": {"id": 55, "first_name": "Ömer"}, "text": "hi"}},
+            {"update_id": 2, "message": {"chat": {"id": -100777, "type": "supergroup", "title": "Kripto"}, "from": {"id": 55, "first_name": "Ömer"}, "text": "/x"}},
+            {"update_id": 3, "my_chat_member": {"chat": {"id": -100888, "type": "group", "title": "Eski"}, "from": {"id": 12, "first_name": "Ali", "is_bot": False}}}]}
+        notifier = TelegramNotifier("T", "0", session=FakeSession([Resp(updates)]))
+        seen = notifier.discover()
+        self.assertEqual(seen["chats"][-100777], ("supergroup", "Kripto"))
+        self.assertEqual(seen["chats"][55][0], "private")
+        self.assertEqual(seen["users"], {55: "Ömer", 12: "Ali"})
+        group = TelegramNotifier("T", "-100777", session=FakeSession([Resp({"ok": True})]))
+        self.assertTrue(group.send("x"))
+        self.assertEqual(group.session.requests[0][2]["chat_id"], "-100777")
+
+    def test_supergroup_migration_is_explained(self):
+        session = FakeSession([Resp({"ok": False, "description": "group chat was upgraded to a supergroup chat",
+                                     "parameters": {"migrate_to_chat_id": -100999}}, 400)] * 2)
+        with self.assertLogs("crypto_watcher.telegram", "WARNING") as logs:
+            TelegramNotifier("T", "-5", session=session).send("x")
+        self.assertIn("TELEGRAM_CHAT_ID=-100999", "\n".join(logs.output))
+
+    def test_allowed_user_ids_from_env(self):
+        secrets = load_secrets(None, {"TELEGRAM_ALLOWED_USER_IDS": "12, 34 ,"})
+        self.assertEqual(secrets.telegram_allowed_users, ("12", "34"))
 
 
 class StateTests(unittest.TestCase):
@@ -504,6 +532,23 @@ class ScanAndCliTests(unittest.TestCase):
                 self.assertEqual(main(["scan", "--demo", "--json", "--output", str(target)]), 0)
             self.assertEqual(json.loads(out.getvalue())["mode"], "DEMO_SYNTHETIC")
             self.assertEqual(json.loads(target.read_text())["mode"], "DEMO_SYNTHETIC")
+
+    def test_telegram_id_command(self):
+        from unittest import mock
+        from crypto_watcher import telegram as tgm
+        with mock.patch.object(tgm.TelegramNotifier, "whoami", return_value="MyBot"), \
+                mock.patch.object(tgm.TelegramNotifier, "discover", return_value={"chats": {-100777: ("supergroup", "Kripto")}, "users": {55: "Ömer"}}), \
+                tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("TELEGRAM_BOT_TOKEN=abc\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main(["--env-file", str(env), "telegram-id"]), 0)
+            self.assertIn("-100777", out.getvalue())
+            self.assertIn("TELEGRAM_ALLOWED_USER_IDS", out.getvalue())
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main(["--env-file", str(Path(tmp) / "none"), "telegram-id"]), 2)
 
     def test_cli_rejects_bad_config_and_missing_keys(self):
         with tempfile.TemporaryDirectory() as tmp:

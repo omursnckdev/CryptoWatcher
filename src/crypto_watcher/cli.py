@@ -109,6 +109,32 @@ def cmd_check(args, settings, secrets) -> int:
     return 0 if ok else 1
 
 
+def cmd_telegram_id(args, settings, secrets) -> int:
+    """Print the chat/user ids the bot has recently seen, to fill in .env."""
+    from .telegram import TelegramNotifier
+    if not secrets.telegram_token:
+        print("TELEGRAM_BOT_TOKEN .env içinde yok.", file=sys.stderr)
+        return 2
+    notifier = TelegramNotifier(secrets.telegram_token, "0")
+    username = notifier.whoami()
+    if not username:
+        print("Token geçersiz (getMe başarısız).", file=sys.stderr)
+        return 2
+    seen = notifier.discover()
+    print(f"Bot: @{username}\n")
+    if not seen["chats"]:
+        print("Henüz mesaj görmedim. Önce özelde bota 'merhaba' yazın; grup için gruba "
+              f"'/status@{username}' yazın, sonra bu komutu tekrar çalıştırın.")
+        return 1
+    print("Sohbetler (TELEGRAM_CHAT_ID için birini seçin):")
+    for chat_id, (kind, name) in seen["chats"].items():
+        print(f"  {chat_id:>16}  {kind:<11} {name}")
+    print("\nKullanıcılar (grupta /pause, /resume yetkisi için TELEGRAM_ALLOWED_USER_IDS):")
+    for user_id, name in seen["users"].items():
+        print(f"  {user_id:>16}  {name}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="cryptowatcher", description="CryptoWatcher: Binance futures TESTNET long/short bot")
     parser.add_argument("--config", type=Path, help="TOML settings file (default: config/settings.toml if present)")
@@ -124,6 +150,7 @@ def main(argv=None) -> int:
     run_p.add_argument("--dry-run", action="store_true", help="Only announce signals on Telegram; place no orders")
     run_p.add_argument("--once", action="store_true", help="Single scan/manage iteration, then exit")
     sub.add_parser("check", help="Test API keys, Telegram, data sources and news feeds")
+    sub.add_parser("telegram-id", help="Find your Telegram chat id / group id and user id")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -132,7 +159,7 @@ def main(argv=None) -> int:
         config_path = args.config or (Path("config/settings.toml") if Path("config/settings.toml").is_file() else None)
         settings = load_settings(config_path)
         secrets = load_secrets(args.env_file)
-        return {"scan": cmd_scan, "run": cmd_run, "check": cmd_check}[args.command](args, settings, secrets)
+        return {"scan": cmd_scan, "run": cmd_run, "check": cmd_check, "telegram-id": cmd_telegram_id}[args.command](args, settings, secrets)
     except (ValueError, TypeError, OSError, KeyError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

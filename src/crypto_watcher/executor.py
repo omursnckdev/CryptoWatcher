@@ -90,12 +90,10 @@ class Executor:
             return "daily loss limit reached"
         return None
 
-    def _alert(self, key: str, text: str, every: int = 1800):
-        """Throttled warning so a persistent error does not flood the chat."""
-        last = self.state["alerts"].get(key, 0)
-        if self._clock() - last >= every:
-            self.state["alerts"][key] = self._clock()
-            self.notify.send(tg.fmt_warning(text))
+    def _alert(self, key: str, text: str, every: int | None = None):
+        """Non-critical problems are logged and kept for /status; they are NOT pushed to Telegram."""
+        log.warning("%s", text)
+        self.state["last_error"] = {"text": text, "ms": int(self._clock() * 1000)}
 
     # ---- opening ------------------------------------------------------------
     def _set_leverage(self, symbol: str) -> int:
@@ -114,7 +112,7 @@ class Executor:
         sign, order_side, exit_side = (1, "BUY", "SELL") if side == "LONG" else (-1, "SELL", "BUY")
         try:
             if self.client.positions(symbol):
-                self._alert(f"untracked:{symbol}", f"{symbol}: borsada izlenmeyen bir pozisyon var, yeni işlem açılmadı.")
+                self._alert(f"untracked:{symbol}", f"{symbol}: borsada izlenmeyen pozisyon var, işlem açılmadı.", every=86400)
                 return None
             balance = self.balance()
             capital = self.capital(balance)
@@ -124,8 +122,11 @@ class Executor:
             plan = risk_plan(side, mark, candidate["atr_pct"] * mark, capital, self.s, info, leverage)
             if plan["margin"] > balance["available"] * 0.95:
                 raise ValueError(f"Insufficient available balance ({balance['available']:.2f} USDT) for {plan['margin']:.2f} margin")
-        except (BinanceError, ValueError) as error:
-            self._alert(f"open:{symbol}", f"{symbol} {side} açılamadı (emir öncesi): {error}", every=600)
+        except ValueError as error:  # budget/minimum-size refusals: nothing happened, no need to ping the chat
+            log.info("Skip %s %s: %s", symbol, side, error)
+            return None
+        except BinanceError as error:
+            self._alert(f"open:{symbol}", f"{symbol} {side} açılamadı: {error}")
             return None
         opened_ms = int(self._clock() * 1000)
         try:
@@ -134,7 +135,7 @@ class Executor:
             log.error("Entry order error for %s: %s (checking exchange position)", symbol, error)
         positions = self.client.positions(symbol)
         if not positions:
-            self._alert(f"open:{symbol}", f"{symbol} {side} giriş emri gerçekleşmedi.", every=600)
+            self._alert(f"open:{symbol}", f"{symbol} {side} giriş emri gerçekleşmedi.")
             return None
         position = positions[0]
         entry, quantity = float(position["entryPrice"]), abs(float(position["positionAmt"]))
@@ -161,8 +162,9 @@ class Executor:
         except BinanceError as error:
             trade["tp_id"] = None
             self.state.save()
-            self.notify.send(tg.fmt_warning(f"{symbol}: take-profit emri konulamadı ({error}). Pozisyon stop ile korunuyor."))
-        self.notify.send(tg.fmt_open(trade, candidate))
+            log.warning("Take-profit not placed for %s: %s", symbol, error)
+        message = tg.fmt_open(trade, candidate, self.s.telegram_verbose)
+        self.notify.send(message + ("\n⚠️ TP konulamadı, yalnızca stop aktif" if trade["tp_id"] is None else ""))
         return trade
 
     def _emergency_close(self, symbol: str, exit_side: str, quantity: float, reason: str):
@@ -229,7 +231,8 @@ class Executor:
         trade.update(sl_id=new_id, stop=new_stop, breakeven_done=True)
         self.state.save()
         self.client.cancel_algo_order(old_id)
-        self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
+        if self.s.notify_breakeven:
+            self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
 
     def _classify(self, trade: dict, exit_price: float | None) -> str:
         for key, reason in (("sl_id", "BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS"),
@@ -309,7 +312,7 @@ class Executor:
                 trade["sl_id"] = client_id("sl", symbol, int(self._clock() * 1000))
                 try:
                     self.client.algo_order(symbol, exit_side, "STOP_MARKET", trade["stop"], trade["sl_id"])
-                    self.notify.send(tg.fmt_warning(f"{symbol}: yeniden başlatmada stop emri eksikti, yeniden kondu ({tg.price(trade['stop'])})."))
+                    self.notify.send(f"🛡 {tg.esc(symbol)} stop yeniden kondu: {tg.price(trade['stop'])}")
                 except BinanceError as error:
                     self._emergency_close(symbol, exit_side, abs(float(positions[symbol]["positionAmt"])),
                                           f"Stop emri yeniden konulamadı ({error}); pozisyon kapatıldı.")
