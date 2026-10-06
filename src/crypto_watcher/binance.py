@@ -18,6 +18,18 @@ TESTNET_URL = "https://testnet.binancefuture.com"
 TRADING_HOSTS = frozenset({"testnet.binancefuture.com"})
 
 
+def describe_network_error(error: BaseException) -> str:
+    """Root cause of a requests/urllib3 exception, e.g. 'SSLCertVerificationError: certificate verify failed'."""
+    root = error
+    for _ in range(6):
+        nxt = getattr(root, "reason", None) or (root.args[0] if root.args and isinstance(root.args[0], BaseException) else None) \
+              or root.__cause__
+        if not isinstance(nxt, BaseException):
+            break
+        root = nxt
+    return f"{type(root).__name__}: {str(root)[:140]}"
+
+
 class BinanceError(Exception):
     def __init__(self, message: str, code: int | None = None, status: int | None = None):
         super().__init__(message)
@@ -56,7 +68,7 @@ class MarketClient:
             try:
                 response = self.session.request(method, url, params=params, headers=headers, timeout=self.timeout)
             except requests.RequestException as error:
-                last = BinanceError(f"Network error: {error}")
+                last = BinanceError(f"Network error on {path.split('?')[0]}: {describe_network_error(error)}")
                 if attempt < retries:
                     self._sleep(min(2 ** attempt, 8))
                     continue

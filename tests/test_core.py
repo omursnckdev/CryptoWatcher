@@ -400,6 +400,17 @@ class BinanceTests(unittest.TestCase):
         get = FakeSession([requests.Timeout("t"), Resp([])])
         self.assertEqual(MarketClient(session=get, sleep=lambda s: None).ticker_24h(), [])
 
+    def test_network_error_message_names_the_root_cause(self):
+        import ssl
+        import urllib3
+        cause = ssl.SSLCertVerificationError("certificate verify failed: unable to get local issuer certificate")
+        wrapped = requests.exceptions.SSLError(urllib3.exceptions.MaxRetryError(None, "/fapi/v1/ticker/24hr", reason=cause))
+        with self.assertRaises(BinanceError) as ctx:
+            MarketClient(session=FakeSession([wrapped] * 4), sleep=lambda s: None).ticker_24h()
+        self.assertIn("/fapi/v1/ticker/24hr", str(ctx.exception))
+        self.assertIn("SSLCertVerificationError", str(ctx.exception))
+        self.assertIn("certificate verify failed", str(ctx.exception))
+
     def test_rate_limit_backoff_and_error_mapping(self):
         sleeps = []
         session = FakeSession([Resp({"code": -1003, "msg": "slow"}, 429, {"Retry-After": "3"}), Resp({"serverTime": 5})])

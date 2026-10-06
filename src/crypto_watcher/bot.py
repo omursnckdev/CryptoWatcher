@@ -98,7 +98,7 @@ class Bot:
     def _error(self, key: str, error: Exception, every: int | None = None):
         """Loop errors are logged and shown by /status; Telegram stays quiet."""
         log.warning("%s: %s", key, error)
-        self.state["last_error"] = {"text": f"{type(error).__name__}: {error}", "ms": int(self._clock() * 1000)}
+        self.state["last_error"] = {"text": f"{type(error).__name__}: {error}", "ms": int(self._clock() * 1000), "loop": True}
 
     def _roll_day(self):
         if not self.executor.new_day():
@@ -134,6 +134,9 @@ class Bot:
             self.state["signaled"][symbol] = candidate["date"]
         if fresh:  # one digest per scan instead of one message per coin
             self.notify.send(tg.fmt_signals(fresh))
+        last = self.state["last_error"]
+        if last and last.get("loop"):  # the scan loop works again: the old problem is resolved
+            self.state["last_error"] = None
         self.state.save()
 
     # ---- telegram commands -----------------------------------------------------
@@ -216,7 +219,8 @@ class Bot:
                 line += f"\nBorsa okunamadı: {tg.esc(error)}"
         last = self.state["last_error"]
         if last:
-            line += f"\nSon sorun ({tg.now_utc_text(last['ms'])}): {tg.esc(last['text'][:160])}"
+            age = max(0, int(self._clock() * 1000) - last["ms"]) // 60_000
+            line += f"\nSon sorun ({age} dk önce): {tg.esc(last['text'][:300])}"
         return line
 
 

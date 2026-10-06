@@ -435,6 +435,15 @@ class BotTests(Base):
         self.assertNotIn("boom", self.messages())               # errors are not pushed...
         self.assertIn("boom", bot._answer("/status"))           # ...but /status shows them
 
+    def test_status_shows_age_and_clears_loop_errors_once_scans_work_again(self):
+        bot = self.make_bot()
+        bot._error("binance", BinanceError("Network error on /fapi/v1/ticker/24hr: SSLError", None, None))
+        self.clock.now += 180
+        self.assertIn("3 dk önce", bot._answer("/status"))
+        self.assertIn("SSLError", bot._answer("/status"))
+        bot.tick()                                                # a successful scan
+        self.assertNotIn("Son sorun", bot._answer("/status"))
+
     def test_state_survives_restart(self):
         import tempfile, pathlib
         with tempfile.TemporaryDirectory() as tmp:
