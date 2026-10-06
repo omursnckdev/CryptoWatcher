@@ -149,8 +149,9 @@ class Bot:
             self.state.save()
         for command, user in commands:
             self.notify.send(self._answer(command) if self._may(command, user) else
-                             "⛔ Bu komut için yetkiniz yok. Grupta /pause ve /resume için kullanıcı id'nizi "
-                             "TELEGRAM_ALLOWED_USER_IDS içine ekleyin (`cryptowatcher telegram-id`).")
+                             f"⛔ Bu komut için yetkiniz yok. Kullanıcı id'niz: <code>{tg.esc(user)}</code>\n"
+                             "Yetki vermek için botun .env dosyasına TELEGRAM_ALLOWED_USER_IDS=" + tg.esc(user) +
+                             " ekleyip botu yeniden başlatın.")
 
     def _may(self, command: str, user: str) -> bool:
         """Private chat: its owner may do everything. Group: anyone may read, only allowed users may control."""

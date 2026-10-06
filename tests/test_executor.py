@@ -402,6 +402,7 @@ class BotTests(Base):
         bot._commands()
         self.assertFalse(self.state["paused"])
         self.assertIn("yetkiniz yok", self.notifier.sent[-1])
+        self.assertIn("TELEGRAM_ALLOWED_USER_IDS=999", self.notifier.sent[-1])   # tells the user their own id
         self.assertIn("aktif", self.notifier.sent[-2])                          # read-only command works for anyone
         self.notifier.commands = [("/pause", "42")]                             # an allowed user
         bot._commands()
