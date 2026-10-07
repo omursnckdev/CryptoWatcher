@@ -8,3 +8,4 @@ dist/
 reports/
 state/
 *.log
+data/

@@ -111,6 +111,28 @@ def cmd_check(args, settings, secrets) -> int:
     return 0 if ok else 1
 
 
+def cmd_backtest(args, settings, secrets) -> int:
+    from datetime import date, timedelta
+    from .backtest import BacktestConfig, DEFAULT_SYMBOLS, default_dates, format_report, run_backtest
+    default_start, default_end = default_dates()
+    start = date.fromisoformat(args.start) if args.start else default_start
+    end = date.fromisoformat(args.end) if args.end else default_end
+    if end <= start + timedelta(days=14):
+        raise ValueError("backtest period must be longer than 14 days")
+    split = date.fromisoformat(args.split) if args.split else start + (end - start) * 0.7
+    if not start < split < end:
+        raise ValueError("--split must lie between --start and --end")
+    cfg = BacktestConfig(start=start, end=end, split=split, fee=args.fee if args.fee is not None else settings.taker_fee,
+                         slippage=args.slippage, funding=args.funding)
+    symbols = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else list(DEFAULT_SYMBOLS)
+    trades, skipped = run_backtest(settings, cfg, symbols, args.data_dir, args.workers)
+    if args.output and not trades.empty:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        trades.to_csv(args.output, index=False)
+    print(format_report(trades, cfg, settings, len(set(trades.symbol)) if not trades.empty else 0, skipped))
+    return 0
+
+
 def cmd_telegram_id(args, settings, secrets) -> int:
     """Print the chat/user ids the bot has recently seen, to fill in .env."""
     from .telegram import TelegramNotifier
@@ -153,6 +175,17 @@ def main(argv=None) -> int:
     run_p.add_argument("--once", action="store_true", help="Single scan/manage iteration, then exit")
     sub.add_parser("check", help="Test API keys, Telegram, data sources and news feeds")
     sub.add_parser("telegram-id", help="Find your Telegram chat id / group id and user id")
+    bt = sub.add_parser("backtest", help="Replay the strategy on Binance's public historical candles (no orders, no keys)")
+    bt.add_argument("--start", help="YYYY-MM-DD (default: 180 days before --end)")
+    bt.add_argument("--end", help="YYYY-MM-DD (default: yesterday, UTC)")
+    bt.add_argument("--split", help="first day of the out-of-sample test period (default: 70%% into the range)")
+    bt.add_argument("--symbols", help="comma separated, e.g. BTCUSDT,ETHUSDT (default: 24 liquid coins)")
+    bt.add_argument("--data-dir", type=Path, default=Path("data/binance"), help="download cache")
+    bt.add_argument("--fee", type=float, help="taker fee per side (default: taker_fee from settings)")
+    bt.add_argument("--slippage", type=float, default=0.0002, help="per side, default 0.0002 (2 bps)")
+    bt.add_argument("--funding", type=float, default=0.0001, help="constant funding rate given to the scorer")
+    bt.add_argument("--workers", type=int, default=1, help="parallel processes (keep 1 if it misbehaves on Windows)")
+    bt.add_argument("--output", type=Path, help="write every simulated trade to this CSV")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -161,7 +194,8 @@ def main(argv=None) -> int:
         config_path = args.config or (Path("config/settings.toml") if Path("config/settings.toml").is_file() else None)
         settings = load_settings(config_path)
         secrets = load_secrets(args.env_file)
-        return {"scan": cmd_scan, "run": cmd_run, "check": cmd_check, "telegram-id": cmd_telegram_id}[args.command](args, settings, secrets)
+        return {"scan": cmd_scan, "run": cmd_run, "check": cmd_check, "telegram-id": cmd_telegram_id,
+                "backtest": cmd_backtest}[args.command](args, settings, secrets)
     except (ValueError, TypeError, OSError, KeyError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2

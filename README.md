@@ -183,6 +183,33 @@ journalctl -u cryptowatcher -f                             # log
 - Bu Docker imajı ve systemd dosyası bu depodaki geliştirme ortamında derlenip denenemedi (orada Docker çalışmıyor); kurulum adımları temiz bir
   Python ortamında simüle edilerek doğrulandı. Sunucuda ilk çalıştırmada `docker compose logs` ve Telegram'dan `/status` ile kontrol edin.
 
+## Backtest: değişiklikleri canlıya vermeden önce sınayın
+
+Strateji saf fonksiyonlardan oluştuğu için geçmiş mumlarda **canlıdakiyle aynı kodla** (`calculate` → `evaluate` → `risk_plan`) çalıştırılabilir.
+Komut emir göndermez, anahtar istemez; veriyi Binance'in resmi arşivinden (`data.binance.vision`, gerçek mainnet futures mumları)
+indirip `data/binance/` altında önbelleğe alır:
+
+```bash
+cryptowatcher backtest                                   # son 180 gün, 24 likit coin, %70 eğitim / %30 test
+cryptowatcher backtest --start 2026-03-01 --end 2026-09-30 --split 2026-07-01
+cryptowatcher backtest --config config/deneme.toml       # kendi ayarlarınızla (ör. farklı eşik/stop)
+cryptowatcher backtest --symbols BTCUSDT,ETHUSDT,SOLUSDT --output reports/trades.csv
+```
+İlk çalıştırma indirme nedeniyle birkaç dakika sürebilir; sonrası önbellekten birkaç dakikadan kısadır (`--workers 4` hızlandırır;
+Windows'ta sorun çıkarırsa 1 bırakın). Çıktı: işlem sayısı, kazanma oranı, **net ortalama R ve %95 güven aralığı**, **brüt R** (maliyet öncesi),
+toplam R ve aynı sinyalin **tersinin** sonucu; dönem, yön, BTC rejimi, ay ve skor dilimine göre kırılım.
+
+Nasıl okunur:
+- **Net ort.R**, güven aralığıyla birlikte sıfırdan anlamlı biçimde büyük değilse strateji maliyetleri çıkaramıyor demektir.
+- **Brüt R ≈ 0** ve net negatifse kayıp tamamen komisyon ve kaymadır: sinyalde bilgi yok demektir.
+- **Eğitim ve test aynı yönde** değilse bulguya güvenmeyin. Ayarı eğitim döneminde seçip yalnızca bir kez test döneminde doğrulayın;
+  çok sayıda değişikliği denerseniz biri tesadüfen iyi çıkar.
+- Konservatif varsayımlar: giriş sinyalden sonraki mumun açılışında, aynı mumda stop ve hedef varsa stop önce, breakeven bir sonraki mumdan itibaren;
+  komisyon %0,05 × 2 ve kayma %0,02 × 2 (`--fee`, `--slippage`).
+- **Modellenmeyenler:** geçmiş funding (sabit), haber, emir defteri derinliği, portföy limitleri (en çok 5 pozisyon; her sinyal işlenir,
+  bir sembolde aynı anda tek pozisyon) ve testnet'in ek sürtünmesi. Backtest kâr garantisi değil, "bu fikir en azından geçmişte
+  maliyeti çıkarıyor muydu?" sorusunun hızlı bir elemesidir.
+
 ## Sorun giderme
 
 **`CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`** (Windows'ta sık görülür): Python'un kendi sertifika listesi
@@ -209,7 +236,7 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 96 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 116 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 
