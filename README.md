@@ -208,6 +208,22 @@ journalctl -u cryptowatcher -f                             # log
 - Bu Docker imajı ve systemd dosyası bu depodaki geliştirme ortamında derlenip denenemedi (orada Docker çalışmıyor); kurulum adımları temiz bir
   Python ortamında simüle edilerek doğrulandı. Sunucuda ilk çalıştırmada `docker compose logs` ve Telegram'dan `/status` ile kontrol edin.
 
+## Gölge kayıt (işlemsiz hipotez testi)
+
+Bot, **tek bir dondurulmuş hipotezi** gerçek zamanlı ve işlem açmadan izler: *"24 saatte açık pozisyon (OI) kendi geçmişinin en düşük %5'ine
+çöktü ve fiyat düştü → LONG"*. Geçmiş çalışmada (2023-Haz.2025) 24 saatlik tutuşta +51 baz puan net (t≈2,9) verdi, sonraki dönemde (Tem.2025-Eyl.2026)
++3 baz puana indi. Sinyalin hâlâ yaşayıp yaşamadığını ancak hiç görülmemiş yeni veri söyler.
+
+- **Emir göndermez, Telegram'a otomatik mesaj atmaz.** Her saat evreni tarar; kalıp görülürse `state/shadow.jsonl` dosyasına yazar. Holding süreleri (8, 24, 48 saat)
+  bitince sonucu gerçek mumlardan ve gerçek funding'den hesaplar (giriş: tespitten bir saat sonraki açılış; maliyet 14 baz puan).
+- `/golge` (veya `/shadow`) komutu özeti gösterir: olay sayısı, ufuk başına ortalama net, kazanma oranı, t, pozitif ay oranı ve **karar**.
+- **Kural önceden belirlendi ve değiştirilmez** (`src/crypto_watcher/shadow.py` içindeki `DECISION`): en az 150 örtüşmesiz olay, en az 90 gün, 24 saatte ortalama
+  ≥ +15 baz puan, gün-kümeli t ≥ 1,65 ve ayların ≥ %60'ı pozitif. Aksi halde sinyal rafa kalkar. Tanım (eşik, pencere, ufuklar) sonuçlara bakıp ayarlanmamalıdır.
+- Yalnızca gerçek (mainnet) veriyle çalışır; testnet verisine düşülürse kapalıdır. `shadow_enabled = false` ile kapatılır.
+- Doğrulama: `cryptowatcher check` açık pozisyon geçmişi endpoint'inin okunabildiğini sınar. Geçmiş saatler canlı kodla yeniden oynatıldığında çalışmadaki sinyalin %99,3'ü üretildi.
+- Docker'da dosyayı görmek için: `sudo docker compose exec cryptowatcher cat /app/state/shadow.jsonl`.
+- Beklenti: yılda ~700-1000 olay, yani karar için yaklaşık 3 ay. Etkinin küçük olması bekleniyor (maliyetin birkaç on baz puan üstü en iyi ihtimalle).
+
 ## Sorun giderme
 
 **`CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`** (Windows'ta sık görülür): Python'un kendi sertifika listesi
@@ -234,7 +250,7 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 108 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 129 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

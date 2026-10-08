@@ -109,6 +109,13 @@ class MarketClient:
     def ticker_24h(self) -> list:
         return self._request("GET", "/fapi/v1/ticker/24hr")
 
+    def open_interest_hist(self, symbol: str, period: str = "1h", limit: int = 500) -> list:
+        """Open-interest statistics (last ~30 days only). Public; lives under /futures/data, not /fapi."""
+        return self._request("GET", "/futures/data/openInterestHist", {"symbol": symbol, "period": period, "limit": limit})
+
+    def funding_rates(self, symbol: str, start_ms: int, end_ms: int) -> list:
+        return self._request("GET", "/fapi/v1/fundingRate", {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000})
+
     def premium_index(self, symbol: str | None = None):
         return self._request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol} if symbol else None)
 

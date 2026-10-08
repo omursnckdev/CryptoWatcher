@@ -44,6 +44,10 @@ state_file = "state/state.json"
 telegram_verbose = false       # true: mesajlara gerekçe, haber başlığı, marj ve tasfiye fiyatı da eklenir
 notify_breakeven = true        # false: stop başa çekilince mesaj atma
 
+# --- gölge kayıt ---------------------------------------------------------
+# Emir açmadan, dondurulmuş bir hipotezi (OI çöküşü + fiyat düştü -> LONG) kaydeder; sonuçlar /golge ile görülür.
+shadow_enabled = true
+
 # --- haber ------------------------------------------------------------
 news_enabled = true
 news_max_age_hours = 24

@@ -85,6 +85,13 @@ def cmd_check(args, settings, secrets) -> int:
         line(True, "Binance futures testnet erişilebilir")
     except BinanceError as error:
         line(False, f"Testnet erişilemiyor: {error}")
+    if settings.shadow_enabled:
+        try:
+            rows = MarketClient("https://fapi.binance.com").open_interest_hist("BTCUSDT", "1h", 500)
+            float(rows[-1]["sumOpenInterestValue"]); int(rows[-1]["timestamp"])
+            line(len(rows) >= 400, f"Gölge kayıt: açık pozisyon geçmişi okunuyor ({len(rows)} nokta, son {rows[-1]['timestamp']})")
+        except (BinanceError, KeyError, IndexError, TypeError, ValueError) as error:
+            line(False, f"Gölge kayıt: açık pozisyon geçmişi okunamadı ({type(error).__name__}: {str(error)[:120]})")
     if secrets.has_binance:
         try:
             client = TradingClient(secrets.api_key, secrets.api_secret)
