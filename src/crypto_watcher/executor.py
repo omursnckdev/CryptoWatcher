@@ -13,6 +13,7 @@ from .binance import BinanceError, ROUND_HALF_UP, round_step
 from .config import Settings
 from .data import SymbolInfo
 from .strategy import risk_plan
+from . import journal as jr
 from . import telegram as tg
 
 log = logging.getLogger(__name__)
@@ -29,9 +30,9 @@ def _today(clock) -> str:
 
 
 class Executor:
-    def __init__(self, client, settings: Settings, state, notifier, infos: dict[str, SymbolInfo], clock=time.time):
+    def __init__(self, client, settings: Settings, state, notifier, infos: dict[str, SymbolInfo], clock=time.time, journal=None):
         self.client, self.s, self.state, self.notify = client, settings, state, notifier
-        self.infos, self._clock = infos, clock
+        self.infos, self._clock, self.journal = infos, clock, journal
 
     # ---- account / limits -------------------------------------------------
     def prepare(self):
@@ -147,7 +148,12 @@ class Executor:
                  "opened_ms": opened_ms, "sl_id": client_id("sl", symbol, opened_ms), "tp_id": client_id("tp", symbol, opened_ms), "breakeven_done": False,
                  "breakeven_r": self.s.breakeven_r, "be_failures": 0, "finalize_attempts": 0,
                  "planned_risk": quantity * distance, "risk_reward": self.s.tp_r, "score": candidate["score"],
-                 "signal": candidate["signal"]}
+                 "signal": candidate["signal"],
+                 "mfe_r": 0.0, "mae_r": 0.0}
+        try:
+            trade["snap"] = jr.snapshot(candidate)
+        except Exception as error:      # journal context is optional; never block a protected trade over it
+            log.warning("Entry snapshot failed for %s: %s", symbol, error)
         try:
             self.client.algo_order(symbol, exit_side, "STOP_MARKET", stop, trade["sl_id"])
         except BinanceError as error:
@@ -189,6 +195,7 @@ class Executor:
                 if position is None:
                     self._finalize(trade)
                     continue
+                jr.track(trade, float(position["markPrice"]), int(self._clock() * 1000))
                 if self._time_stop(trade, position):
                     continue
                 self._breakeven(trade, float(position["markPrice"]))
@@ -290,12 +297,24 @@ class Executor:
             totals["trades"] += 1
             totals["wins"] += outcome["net_pnl"] > 0
             totals["realized"] += outcome["net_pnl"]
+        entry = self._journal(trade, outcome)
         self.state["trades"].pop(symbol, None)
         self.state["cooldowns"][symbol] = self._clock() + self.s.cooldown_minutes * 60
         self.state.record_close({"symbol": symbol, "side": side, "entry": trade["entry"], "exit": exit_price,
                                  "pnl": outcome["net_pnl"], "reason": outcome["reason"], "closed_ms": outcome["closed_ms"]})
         self.state.save()
-        self.notify.send(tg.fmt_close(trade, outcome))
+        self.notify.send(tg.fmt_close(trade, outcome, jr.explain(entry) if entry else ""))
+
+    def _journal(self, trade: dict, outcome: dict) -> dict | None:
+        if self.journal is None:
+            return None
+        try:
+            record = jr.build_record(trade, outcome)
+            self.journal.add(record)
+            return record
+        except Exception as error:      # the journal is a diary, not part of the safety path
+            log.warning("Journal entry failed for %s: %s", trade["symbol"], error)
+            return None
 
     # ---- startup ------------------------------------------------------------
     def reconcile(self):

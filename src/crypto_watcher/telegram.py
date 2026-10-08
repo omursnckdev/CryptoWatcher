@@ -234,14 +234,14 @@ def fmt_signals(candidates: list[dict], limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def fmt_close(trade: dict, outcome: dict) -> str:
+def fmt_close(trade: dict, outcome: dict, why: str = "") -> str:
     pnl = outcome.get("net_pnl")
     icon = "⚪" if pnl is None else "✅" if pnl > 0 else "❌"
     held = max(0, outcome["closed_ms"] - trade["opened_ms"]) // 60_000
     result = "PnL alınamadı" if pnl is None else f"<b>{pnl:+,.2f} USDT</b> ({outcome['r_multiple']:+.1f}R)"
     return (f"{icon} <b>{esc(trade['symbol'])} {esc(trade['side'])} kapandı</b> · {esc(SHORT_REASONS.get(outcome['reason'], outcome['reason']))}\n"
             f"{price(trade['entry'])} → {price(outcome['exit_price']) if outcome.get('exit_price') else '?'} · {result} · "
-            f"{held // 60}sa {held % 60}dk")
+            f"{held // 60}sa {held % 60}dk" + (f"\n{esc(why)}" if why else ""))
 
 
 def fmt_breakeven(trade: dict, new_stop: float, mark: float) -> str:

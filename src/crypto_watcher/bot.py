@@ -13,25 +13,26 @@ from .state import StateStore
 from . import telegram as tg
 
 log = logging.getLogger(__name__)
-MENU = [("/golge", "Gölge kayıt (işlemsiz hipotez testi)"), ("/positions", "Açık pozisyonlar ve anlık kâr/zarar"), ("/pnl", "Kâr/zarar özeti"), ("/status", "Bot durumu ve bakiye"),
+MENU = [("/analiz", "Kapanan işlemlerin zarar/kâr analizi"), ("/golge", "Gölge kayıt (işlemsiz hipotez testi)"), ("/positions", "Açık pozisyonlar ve anlık kâr/zarar"), ("/pnl", "Kâr/zarar özeti"), ("/status", "Bot durumu ve bakiye"),
         ("/top", "En yüksek skorlu coinler"), ("/pause", "Yeni işlem açmayı durdur"), ("/resume", "Yeni işlem açmaya devam et"),
         ("/help", "Komut listesi")]
-ALIASES = {"/shadow": "/golge", "/pozisyon": "/positions", "/pozisyonlar": "/positions", "/kar": "/pnl", "/zarar": "/pnl", "/karzarar": "/pnl",
+ALIASES = {"/shadow": "/golge", "/journal": "/analiz", "/gunluk": "/analiz", "/analysis": "/analiz", "/pozisyon": "/positions", "/pozisyonlar": "/positions", "/kar": "/pnl", "/zarar": "/pnl", "/karzarar": "/pnl",
            "/bakiye": "/pnl", "/durum": "/status", "/start": "/help", "/yardim": "/help"}
 HELP = ("Komutlar:\n/positions (/pozisyon): açık pozisyonlar, anlık fiyat ve kâr/zarar\n/pnl (/kar): günlük ve toplam kâr/zarar\n"
-        "/status (/durum): bot durumu ve bakiye\n/golge (/shadow): gölge kayıt sonuçları\n/top: en yüksek skorlar\n/pause, /resume: yeni işlem açmayı durdur/sürdür")
+        "/status (/durum): bot durumu ve bakiye\n/analiz: kapanan işlemler neden kazandı/kaybetti\n/golge (/shadow): gölge kayıt sonuçları\n/top: en yüksek skorlar\n/pause, /resume: yeni işlem açmayı durdur/sürdür")
 
 
 class Bot:
     def __init__(self, settings: Settings, provider, source: str, source_warning: str | None, notifier,
                  state: StateStore, executor=None, venue: MarketClient | None = None, news: NewsService | None = None,
-                 clock=time.time, sleep=time.sleep, allowed_users: tuple[str, ...] = (), shadow=None):
+                 clock=time.time, sleep=time.sleep, allowed_users: tuple[str, ...] = (), shadow=None, journal=None, journal_market=None):
         self.s, self.provider, self.source, self.warning = settings, provider, source, source_warning
         self.notify, self.state, self.executor = notifier, state, executor
         self.venue = venue or MarketClient(TESTNET_URL)
         self.news, self._clock, self._sleep = news, clock, sleep
         self.allowed_users = tuple(allowed_users)
         self.shadow, self._shadow_at = shadow, 0.0
+        self.journal, self.journal_market, self._journal_at = journal, journal_market, 0.0
         self.infos, self.universe, self.report = {}, [], None
         self._universe_at = self._scan_at = self._manage_at = 0.0
         self._stop = False
@@ -111,6 +112,12 @@ class Bot:
                     self.shadow.tick(self.universe)
                 except Exception as error:           # a research recorder must never be able to stop the trading loop
                     log.warning("Shadow recorder failed: %s", error)
+            if self.journal and self.journal_market and now - self._journal_at >= self.s.scan_interval_seconds:
+                self._journal_at = now
+                try:
+                    self.journal.followups(self.journal_market)
+                except Exception as error:           # a diary must never be able to stop the trading loop
+                    log.warning("Journal follow-up failed: %s", error)
         except BinanceError as error:
             self._error("binance", error)
         except Exception as error:  # keep the loop alive; the exchange-side stop still protects positions
@@ -191,6 +198,8 @@ class Bot:
                 else "▶️ Yeni işlem açılışı yeniden başladı."
         if command == "/golge":
             return self.shadow.format_summary() if self.shadow else "Gölge kayıt kapalı (shadow_enabled = false veya veri kaynağı mainnet değil)."
+        if command == "/analiz":
+            return self.journal.format_summary() if self.journal else "İşlem günlüğü kapalı (journal_enabled = false veya dry-run)."
         if command == "/top":
             return tg.fmt_top(self.report) if self.report else "Henüz tarama yapılmadı."
         if command in ("/pnl", "/positions"):
@@ -258,12 +267,17 @@ def build_bot(settings: Settings, secrets, dry_run: bool, session=None, state_pa
     if settings.shadow_enabled and source == "mainnet":       # testnet open interest is synthetic: recording it would be meaningless
         from .shadow import ShadowRecorder
         shadow = ShadowRecorder(provider.client, cached, Path(settings.state_file).parent / "shadow.jsonl")
+    journal = None
+    if settings.journal_enabled and not dry_run:
+        from .journal import Journal
+        journal = Journal(Path(settings.state_file).parent / "journal.jsonl")
+    journal_market = provider.client if source == "mainnet" else None   # testnet candles are synthetic: no post-close verdicts then
     if dry_run:
         return Bot(settings, cached, source, warning, notifier, state, None, MarketClient(TESTNET_URL, session=session), news,
                allowed_users=secrets.telegram_allowed_users, shadow=shadow)
     if not secrets.has_binance:
         raise ValueError("BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET missing (see .env.example); use --dry-run to try without keys")
     client = TradingClient(secrets.api_key, secrets.api_secret, session=session)
-    executor = Executor(client, settings, state, notifier, {})
+    executor = Executor(client, settings, state, notifier, {}, journal=journal)
     return Bot(settings, cached, source, warning, notifier, state, executor, client, news,
-               allowed_users=secrets.telegram_allowed_users, shadow=shadow)
+               allowed_users=secrets.telegram_allowed_users, shadow=shadow, journal=journal, journal_market=journal_market)

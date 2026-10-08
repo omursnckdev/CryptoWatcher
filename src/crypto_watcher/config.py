@@ -69,6 +69,7 @@ class Settings:
     # --- telegram ----------------------------------------------------
     telegram_verbose: bool = False     # add reasons, headlines, margin and liquidation price to messages
     notify_breakeven: bool = True      # message when a trade is revised (stop moved to breakeven)
+    journal_enabled: bool = True       # keep a per-trade journal (entry context, best/worst excursion, post-close follow-up) for /analiz
     shadow_enabled: bool = True        # record the frozen "OI collapse + price down -> LONG" hypothesis (no orders, no pushes)
     # --- news --------------------------------------------------------
     news_enabled: bool = True

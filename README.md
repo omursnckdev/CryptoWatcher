@@ -100,6 +100,7 @@ Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomat
 |---|---|
 | `/positions` (`/pozisyon`) | Açık pozisyonlar, pozisyon başına 2 satır: PnL (USDT, %, R), giriş → anlık fiyat, SL/TP, süre; toplam açık PnL |
 | `/pnl` (`/kar`) | Bugün (kapanan + açık), tüm zamanlar, isabet oranı, son 5 işlem |
+| `/analiz` (`/gunluk`) | Kapanan işlemlerin teşhisi: neden kaybetti/kazandı, stoptan sonra fiyat ne yaptı |
 | `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
 | `/top` | En yüksek skorlu 5 coin |
 | `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
@@ -207,6 +208,20 @@ journalctl -u cryptowatcher -f                             # log
   ve `ufw allow OpenSSH && ufw enable` ile gelen bağlantıları kısıtlayın.
 - Bu Docker imajı ve systemd dosyası bu depodaki geliştirme ortamında derlenip denenemedi (orada Docker çalışmıyor); kurulum adımları temiz bir
   Python ortamında simüle edilerek doğrulandı. Sunucuda ilk çalıştırmada `docker compose logs` ve Telegram'dan `/status` ile kontrol edin.
+
+## İşlem günlüğü ve zarar analizi (`/analiz`)
+
+Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim, gerekçeler), işlem açıkken **fiyatın nereye kadar gittiğini**
+(en iyi / en kötü an, R cinsinden: MFE / MAE) ve kapanıştan **12 saat sonra fiyatın ne yaptığını** `state/journal.jsonl` dosyasına yazar.
+
+- Her kapanış mesajına tek satır eklenir: `↳ en iyi +0.5R · en kötü -1.0R · bir miktar lehine gitti, geri döndü`.
+- Teşhis sınıfları: *hedefe ulaştı · hiç lehine gitmedi (en iyi < 0,25R) · bir miktar gitti geri döndü · kârdayken geri verdi · başa baş stop · süre doldu · dışarıdan kapandı*.
+- Stop yiyen işlemlerde kapanıştan sonraki 12 saat mainnet 5 dakikalık mumlarla değerlendirilir: fiyat lehimize ≥ 1R döndüyse **stop dar/gürültüye takıldı**,
+  aleyhe ≥ 1R devam ettiyse **stop doğru çıkıştı**. Yalnızca göreli hareket kullanılır (işlem testnet fiyatında, mumlar mainnet'ten).
+- `/analiz` toplu özeti verir (kazanma, ortalama R, sınıf dağılımı, yön ve skor dilimi bazında ortalama, son işlemler). **En az 20 işlem birikmeden yorum yapmaz**;
+  küçük örnekteki rakamlara bakıp ayar değiştirmek yanıltıcıdır.
+- Özellik açıldığından önce kapanan işlemler günlükte yoktur (o zaman bu veriler tutulmuyordu). Emir göndermez, hata verirse işlem akışını etkilemez.
+  `journal_enabled = false` ile kapatılır. Dosya: `sudo docker compose exec cryptowatcher cat /app/state/journal.jsonl`.
 
 ## Gölge kayıt (işlemsiz hipotez testi)
 

@@ -103,8 +103,13 @@ class MarketClient:
     def exchange_info(self) -> dict:
         return self._request("GET", "/fapi/v1/exchangeInfo")
 
-    def klines(self, symbol: str, interval: str, limit: int = 300) -> list:
-        return self._request("GET", "/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    def klines(self, symbol: str, interval: str, limit: int = 300, start_ms: int | None = None, end_ms: int | None = None) -> list:
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start_ms is not None:
+            params["startTime"] = start_ms
+        if end_ms is not None:
+            params["endTime"] = end_ms
+        return self._request("GET", "/fapi/v1/klines", params)
 
     def ticker_24h(self) -> list:
         return self._request("GET", "/fapi/v1/ticker/24hr")
