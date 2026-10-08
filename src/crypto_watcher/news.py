@@ -135,6 +135,7 @@ class NewsService:
         self._items: list[Headline] = []
         self._fetched = float("-inf")
         self.last_errors: list[str] = []
+        self._failing: dict[str, list] = {}      # url -> [consecutive failures, time of last log line]
 
     def refresh(self, force: bool = False):
         if not force and self._clock() - self._fetched < self.cache_seconds:
@@ -147,12 +148,24 @@ class NewsService:
                 items.extend(parse_feed(response.content, re.sub(r"^https?://(www\.)?", "", url).split("/")[0]))
             except (requests.RequestException, ET.ParseError, ValueError) as error:
                 errors.append(f"{url}: {error}")
+                self._note_failure(url, error)
+            else:
+                if self._failing.pop(url, None):
+                    log.info("News feed recovered: %s", url)
         self.last_errors = errors
         if items or not self._items:  # keep stale items if every feed failed
             self._items = items
         self._fetched = self._clock()
-        if errors:
-            log.warning("News feed errors: %s", "; ".join(errors))
+
+    LOG_EVERY = 6 * 3600
+
+    def _note_failure(self, url: str, error: Exception):
+        """A feed that keeps failing (e.g. a site blocking datacenter IPs) is logged on the first failure and then every 6 hours."""
+        state = self._failing.setdefault(url, [0, float("-inf")])
+        state[0] += 1
+        if self._clock() - state[1] >= self.LOG_EVERY:
+            state[1] = self._clock()
+            log.warning("News feed %s failing (%d consecutive failure(s)): %s", url, state[0], error)
 
     def for_coin(self, base: str) -> NewsResult:
         self.refresh()

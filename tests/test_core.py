@@ -271,6 +271,51 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(session.calls, 2)  # cached
 
 
+class NewsLoggingTests(unittest.TestCase):
+    def test_a_permanently_blocked_feed_is_logged_rarely_and_the_rest_keep_working(self):
+        class Resp:
+            def __init__(self, ok): self.ok, self.content = ok, b"<rss><channel><item><title>BTC surges</title><pubDate>Tue, 06 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>"
+            def raise_for_status(self):
+                if not self.ok: raise requests.HTTPError("403 Client Error: Forbidden")
+        class Session:
+            def get(self, url, **kw): return Resp("blocked" not in url)
+        now = [1791280800.0 + 60]
+        service = news_mod.NewsService(["https://good/rss", "https://blocked/feed"], session=Session(), clock=lambda: now[0], cache_minutes=10)
+        with self.assertLogs("crypto_watcher.news", "INFO") as logs:
+            for _ in range(30):                                  # 30 refreshes = 5 hours of failures
+                service.refresh(force=True)
+                now[0] += 600
+        warnings = [r for r in logs.records if r.levelname == "WARNING"]
+        self.assertEqual(len(warnings), 1)                       # not 30
+        self.assertIn("403", warnings[0].getMessage())
+        self.assertTrue(service.for_coin("BTC").available)       # healthy feeds still feed the sentiment
+        now[0] += 7 * 3600
+        with self.assertLogs("crypto_watcher.news", "WARNING") as later:
+            service.refresh(force=True)
+        self.assertIn("consecutive", later.records[0].getMessage())   # reminded after 6 hours, with the count
+
+    def test_recovery_is_announced_once(self):
+        state = {"up": False}
+        class Session:
+            def get(self_, url, **kw):
+                class R:
+                    content = b"<rss><channel></channel></rss>"
+                    def raise_for_status(r):
+                        if not state["up"]: raise requests.ConnectionError("down")
+                return R()
+        service = news_mod.NewsService(["https://x/rss"], session=Session(), clock=lambda: 1000.0)
+        with self.assertLogs("crypto_watcher.news", "INFO") as logs:
+            service.refresh(force=True)
+            state["up"] = True
+            service.refresh(force=True)
+            service.refresh(force=True)
+        self.assertEqual([r.levelname for r in logs.records], ["WARNING", "INFO"])
+
+    def test_default_feeds_do_not_include_sites_that_block_datacenter_ips(self):
+        from crypto_watcher.config import DEFAULT_FEEDS
+        self.assertFalse(any("cryptoslate" in feed for feed in DEFAULT_FEEDS))
+
+
 class ConfigTests(unittest.TestCase):
     def test_defaults_are_valid(self):
         Settings()

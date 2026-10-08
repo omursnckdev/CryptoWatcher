@@ -58,7 +58,7 @@ BTC/ETH ile sınırlı değildir; `min_quote_volume` ile altcoin eşiğini siz b
 | Üst zaman dilimi | 10 | 4s EMA50, EMA20/50, MACD |
 | BTC'ye göre güç | 10 | 6/24/72 mumda BTC'ye göre getiri farkı |
 | BTC rejimi | 5 | BULL / NEUTRAL / BEAR / HIGH_VOLATILITY |
-| **Haber** | 10 | CoinDesk, Cointelegraph, Decrypt, The Block, CryptoSlate RSS başlıkları; anahtar kelime sözlüğü + zaman ağırlığı |
+| **Haber** | 10 | CoinDesk, Cointelegraph, Decrypt, The Block RSS başlıkları; anahtar kelime sözlüğü + zaman ağırlığı |
 
 Eksik veri **nötr puan almaz**: haber bulunamazsa (ya da BTC için "BTC'ye göre güç" yoksa) skor mevcut puanlar üzerinden
 normalize edilir ve rapor bunu `unavailable` olarak gösterir. Haber ayrıca bir **veto** işlevi görür: pozisyon yönünün aleyhine
@@ -250,7 +250,7 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 129 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 132 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

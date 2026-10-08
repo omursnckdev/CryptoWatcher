@@ -14,7 +14,6 @@ DEFAULT_FEEDS = (
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
     "https://www.theblock.co/rss.xml",
-    "https://cryptoslate.com/feed/",
 )
 
 
