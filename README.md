@@ -101,6 +101,7 @@ Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomat
 | `/positions` (`/pozisyon`) | Açık pozisyonlar, pozisyon başına 2 satır: PnL (USDT, %, R), giriş → anlık fiyat, SL/TP, süre; toplam açık PnL |
 | `/pnl` (`/kar`) | Bugün (kapanan + açık), tüm zamanlar, isabet oranı, son 5 işlem |
 | `/analiz` (`/gunluk`) | Kapanan işlemlerin teşhisi: neden kaybetti/kazandı, stoptan sonra fiyat ne yaptı |
+| `/atlanan` (`/limit`) | Pozisyon limitlerinin engellediği sinyaller açılsaydı ne getirirdi (simülasyon) |
 | `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
 | `/top` | En yüksek skorlu 5 coin |
 | `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
@@ -222,6 +223,23 @@ Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim
   küçük örnekteki rakamlara bakıp ayar değiştirmek yanıltıcıdır.
 - Özellik açıldığından önce kapanan işlemler günlükte yoktur (o zaman bu veriler tutulmuyordu). Emir göndermez, hata verirse işlem akışını etkilemez.
   `journal_enabled = false` ile kapatılır. Dosya: `sudo docker compose exec cryptowatcher cat /app/state/journal.jsonl`.
+
+## Atlanan sinyaller (`/atlanan`)
+
+"Aynı yönde en fazla 3 pozisyon" gibi limitler riski sınırlar ama iyi bir fırsatı da kaçırtabilir. Bunu tahminle değil veriyle görmek için bot
+**her sinyali** (açılan da, limit yüzünden açılmayan da) `state/signals.jsonl` dosyasına yazar ve emir göndermeden, mainnet 5 dakikalık mumlarla
+botun kendi kurallarıyla yeniden oynatır: ATR stopu, 2R hedef, +1R'de başa baş, 48 saat zaman stopu, komisyon + kayma.
+
+- Gruplar: *açıldı*, *yön limiti*, *toplam pozisyon limiti*, *bekleme süresi*, *günlük zarar kilidi*, *duraklatıldı*, *emir/bütçe nedeniyle açılmadı*.
+  Aynı mumdaki tekrar taramalar tek sinyal sayılır; "zaten bu coinde pozisyon var" bir alternatif işlem olmadığı için kaydedilmez.
+- Açılan ve atlanan sinyaller **aynı simülasyonla** ölçülür, yani karşılaştırılabilir. Simülasyon, açılan işlemlerde gerçek sonuçla da karşılaştırılır
+  (`🔍 Doğrulama` satırı, en az 5 işlem gerekir): iki rakam birbirinden çok uzaksa simülasyonun atlanan sinyaller hakkındaki yargısına güvenilmez.
+- Belirsiz mumda (aynı mum hem stopa hem hedefe değdiyse) işlem stop yemiş sayılır. Başa baş koruması, +1R'ye ulaşılan mumdan **sonraki** mumda başlar.
+  Funding hesaba katılmaz (en fazla 48 saat, etkisi küçük).
+- Aynı gündeki sinyaller birlikte hareket eder; bu yüzden t istatistiği **günlük ortalamalarla** hesaplanır. **En az 30 atlanan sinyal ve 10 farklı gün**
+  birikmeden yorum yapılmaz. Atlananların ortalaması ≤ 0 ise limit zarar eden işlemleri engelliyor demektir; pozitifse ancak t ≥ 1,65 ise
+  "fırsat kaçırıyor olabilir" denir, o zaman bile bu bir işarettir, kanıt değil.
+- Emir göndermez, Telegram'a otomatik mesaj atmaz. `signal_log_enabled = false` ile kapatılır; yalnızca mainnet verisiyle çalışır.
 
 ## Gölge kayıt (işlemsiz hipotez testi)
 

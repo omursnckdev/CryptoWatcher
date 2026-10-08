@@ -9,23 +9,24 @@ from .config import Settings
 from .data import CachedProvider, choose_market_source, parse_exchange_info, select_universe
 from .engine import actionable, scan
 from .news import NewsService
+from .signals import NOT_OPENED, TAKEN, SignalLog, skip_label
 from .state import StateStore
 from . import telegram as tg
 
 log = logging.getLogger(__name__)
-MENU = [("/analiz", "Kapanan işlemlerin zarar/kâr analizi"), ("/golge", "Gölge kayıt (işlemsiz hipotez testi)"), ("/positions", "Açık pozisyonlar ve anlık kâr/zarar"), ("/pnl", "Kâr/zarar özeti"), ("/status", "Bot durumu ve bakiye"),
+MENU = [("/atlanan", "Limitlerin atladığı sinyaller (simülasyon)"), ("/analiz", "Kapanan işlemlerin zarar/kâr analizi"), ("/golge", "Gölge kayıt (işlemsiz hipotez testi)"), ("/positions", "Açık pozisyonlar ve anlık kâr/zarar"), ("/pnl", "Kâr/zarar özeti"), ("/status", "Bot durumu ve bakiye"),
         ("/top", "En yüksek skorlu coinler"), ("/pause", "Yeni işlem açmayı durdur"), ("/resume", "Yeni işlem açmaya devam et"),
         ("/help", "Komut listesi")]
-ALIASES = {"/shadow": "/golge", "/journal": "/analiz", "/gunluk": "/analiz", "/analysis": "/analiz", "/pozisyon": "/positions", "/pozisyonlar": "/positions", "/kar": "/pnl", "/zarar": "/pnl", "/karzarar": "/pnl",
+ALIASES = {"/shadow": "/golge", "/skipped": "/atlanan", "/limit": "/atlanan", "/journal": "/analiz", "/gunluk": "/analiz", "/analysis": "/analiz", "/pozisyon": "/positions", "/pozisyonlar": "/positions", "/kar": "/pnl", "/zarar": "/pnl", "/karzarar": "/pnl",
            "/bakiye": "/pnl", "/durum": "/status", "/start": "/help", "/yardim": "/help"}
 HELP = ("Komutlar:\n/positions (/pozisyon): açık pozisyonlar, anlık fiyat ve kâr/zarar\n/pnl (/kar): günlük ve toplam kâr/zarar\n"
-        "/status (/durum): bot durumu ve bakiye\n/analiz: kapanan işlemler neden kazandı/kaybetti\n/golge (/shadow): gölge kayıt sonuçları\n/top: en yüksek skorlar\n/pause, /resume: yeni işlem açmayı durdur/sürdür")
+        "/status (/durum): bot durumu ve bakiye\n/analiz: kapanan işlemler neden kazandı/kaybetti\n/atlanan: limitler yüzünden açılmayan sinyaller ne getirirdi\n/golge (/shadow): gölge kayıt sonuçları\n/top: en yüksek skorlar\n/pause, /resume: yeni işlem açmayı durdur/sürdür")
 
 
 class Bot:
     def __init__(self, settings: Settings, provider, source: str, source_warning: str | None, notifier,
                  state: StateStore, executor=None, venue: MarketClient | None = None, news: NewsService | None = None,
-                 clock=time.time, sleep=time.sleep, allowed_users: tuple[str, ...] = (), shadow=None, journal=None, journal_market=None):
+                 clock=time.time, sleep=time.sleep, allowed_users: tuple[str, ...] = (), shadow=None, journal=None, journal_market=None, signals=None):
         self.s, self.provider, self.source, self.warning = settings, provider, source, source_warning
         self.notify, self.state, self.executor = notifier, state, executor
         self.venue = venue or MarketClient(TESTNET_URL)
@@ -33,6 +34,7 @@ class Bot:
         self.allowed_users = tuple(allowed_users)
         self.shadow, self._shadow_at = shadow, 0.0
         self.journal, self.journal_market, self._journal_at = journal, journal_market, 0.0
+        self.signals, self._signals_at = signals, 0.0
         self.infos, self.universe, self.report = {}, [], None
         self._universe_at = self._scan_at = self._manage_at = 0.0
         self._stop = False
@@ -118,6 +120,12 @@ class Bot:
                     self.journal.followups(self.journal_market)
                 except Exception as error:           # a diary must never be able to stop the trading loop
                     log.warning("Journal follow-up failed: %s", error)
+            if self.signals and now - self._signals_at >= self.s.scan_interval_seconds:
+                self._signals_at = now
+                try:
+                    self.signals.resolve()
+                except Exception as error:           # a research log must never be able to stop the trading loop
+                    log.warning("Signal log failed: %s", error)
         except BinanceError as error:
             self._error("binance", error)
         except Exception as error:  # keep the loop alive; the exchange-side stop still protects positions
@@ -158,8 +166,10 @@ class Bot:
             reason = self.executor.can_open(candidate)
             if reason:
                 log.info("Skip %s %s: %s", symbol, candidate["side"], reason)
+                self._note_signal(candidate, skip_label(reason))
                 continue
-            self.executor.open_trade(candidate)
+            trade = self.executor.open_trade(candidate)
+            self._note_signal(candidate, TAKEN if trade else NOT_OPENED, trade)
             self.state["signaled"][symbol] = candidate["date"]
         if fresh:  # one digest per scan instead of one message per coin
             self.notify.send(tg.fmt_signals(fresh))
@@ -167,6 +177,14 @@ class Bot:
         if last and last.get("loop"):  # the scan loop works again: the old problem is resolved
             self.state["last_error"] = None
         self.state.save()
+
+    def _note_signal(self, candidate: dict, status: str | None, trade: dict | None = None):
+        if not self.signals or not status:
+            return
+        try:
+            self.signals.note(candidate, status, trade)
+        except Exception as error:
+            log.warning("Signal log failed: %s", error)
 
     # ---- telegram commands -----------------------------------------------------
     CONTROL = ("/pause", "/resume")
@@ -200,6 +218,8 @@ class Bot:
             return self.shadow.format_summary() if self.shadow else "Gölge kayıt kapalı (shadow_enabled = false veya veri kaynağı mainnet değil)."
         if command == "/analiz":
             return self.journal.format_summary() if self.journal else "İşlem günlüğü kapalı (journal_enabled = false veya dry-run)."
+        if command == "/atlanan":
+            return self.signals.format_summary(self.journal) if self.signals else "Sinyal kaydı kapalı (signal_log_enabled = false, dry-run veya veri kaynağı mainnet değil)."
         if command == "/top":
             return tg.fmt_top(self.report) if self.report else "Henüz tarama yapılmadı."
         if command in ("/pnl", "/positions"):
@@ -271,6 +291,9 @@ def build_bot(settings: Settings, secrets, dry_run: bool, session=None, state_pa
     if settings.journal_enabled and not dry_run:
         from .journal import Journal
         journal = Journal(Path(settings.state_file).parent / "journal.jsonl")
+    signals = None
+    if settings.signal_log_enabled and not dry_run and source == "mainnet":   # replays need real candles
+        signals = SignalLog(Path(settings.state_file).parent / "signals.jsonl", provider.client, settings)
     journal_market = provider.client if source == "mainnet" else None   # testnet candles are synthetic: no post-close verdicts then
     if dry_run:
         return Bot(settings, cached, source, warning, notifier, state, None, MarketClient(TESTNET_URL, session=session), news,
@@ -280,4 +303,4 @@ def build_bot(settings: Settings, secrets, dry_run: bool, session=None, state_pa
     client = TradingClient(secrets.api_key, secrets.api_secret, session=session)
     executor = Executor(client, settings, state, notifier, {}, journal=journal)
     return Bot(settings, cached, source, warning, notifier, state, executor, client, news,
-               allowed_users=secrets.telegram_allowed_users, shadow=shadow, journal=journal, journal_market=journal_market)
+               allowed_users=secrets.telegram_allowed_users, shadow=shadow, journal=journal, journal_market=journal_market, signals=signals)
