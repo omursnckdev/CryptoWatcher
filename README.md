@@ -177,6 +177,8 @@ Docker Desktop → Settings → General → *Start Docker Desktop when you sign 
 
 ### Yöntem 2: Docker'sız (systemd)
 
+Python **3.12 veya üstü** gerekir (Ubuntu 24.04'te hazır gelir; Ubuntu 22.04 ve Debian 12'de eski olduğundan kurulum başarısız olur; Docker'da bu sorun yoktur).
+
 ```bash
 apt update && apt install -y python3 python3-venv git
 useradd --system --create-home --home-dir /opt/cryptowatcher cryptowatcher
@@ -187,6 +189,13 @@ sed 's#/opt/cryptowatcher#/opt/cryptowatcher/app#g' deploy/cryptowatcher.service
 systemctl daemon-reload && systemctl enable --now cryptowatcher
 journalctl -u cryptowatcher -f                             # log
 ```
+
+| İş | Komut |
+|---|---|
+| Durum | `systemctl status cryptowatcher` |
+| Güncelleme | `cd /opt/cryptowatcher/app && sudo -u cryptowatcher git pull && sudo -u cryptowatcher .venv/bin/pip install . && systemctl restart cryptowatcher` |
+| Ayar (`config/settings.toml`) veya `.env` değişikliği | `systemctl restart cryptowatcher` |
+| Durdurma | `systemctl stop cryptowatcher` (pozisyonlar borsada korunur) |
 
 ### Geçerken dikkat
 
