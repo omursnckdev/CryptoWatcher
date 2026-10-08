@@ -163,6 +163,18 @@ docker compose logs -f --tail 50                           # canlı log (çıkı
 | `.env` değişikliği | `docker compose up -d --force-recreate` |
 | Durdurma | `docker compose down` (pozisyonlar borsada korunur) |
 
+### Yalnızca kendi bilgisayarınızda Docker (geçici çözüm)
+
+Docker Desktop (Windows) ile bot arka planda çalışır, terminali kapatsanız da durmaz ve çökerse yeniden açılır. **Ama bilgisayar kapanırsa veya
+uykuya geçerse bot da durur** (açık pozisyonlar borsadaki stop/TP ile korunur). Kesintisiz için sunucu şart.
+
+```powershell
+cd C:\Users\user\Desktop\CryptoWatcher\CryptoWatcher     # .env dosyasının olduğu klasör
+docker compose up -d --build
+docker compose logs -f --tail 50
+```
+Docker Desktop → Settings → General → *Start Docker Desktop when you sign in* açık olsun; Windows güç ayarlarında uykuyu kapatın.
+
 ### Yöntem 2: Docker'sız (systemd)
 
 ```bash
@@ -213,7 +225,7 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 107 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 108 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

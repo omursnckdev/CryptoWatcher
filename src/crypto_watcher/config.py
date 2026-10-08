@@ -173,10 +173,19 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _clean(value: str) -> str:
+    """Whitespace, a stray Windows \\r, or quotes left by older Docker env_file parsers would silently break a token."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
+    return value
+
+
 def load_secrets(env_file: Path | None = Path(".env"), environ=None) -> Secrets:
     """Real environment variables win over the .env file."""
     environ = os.environ if environ is None else environ
-    merged = {**(parse_env_file(env_file) if env_file else {}), **{k: v for k, v in environ.items() if v}}
+    merged = {k: _clean(v) for k, v in {**(parse_env_file(env_file) if env_file else {}),
+                                        **{k: v for k, v in environ.items() if v}}.items()}
     return Secrets(api_key=merged.get("BINANCE_TESTNET_API_KEY", ""),
                    api_secret=merged.get("BINANCE_TESTNET_API_SECRET", ""),
                    telegram_token=merged.get("TELEGRAM_BOT_TOKEN", ""),

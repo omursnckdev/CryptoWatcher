@@ -296,6 +296,14 @@ class ConfigTests(unittest.TestCase):
     def test_shipped_settings_file_loads(self):
         load_settings(Path(__file__).resolve().parents[1] / "config" / "settings.toml")
 
+    def test_secret_values_are_cleaned_of_quotes_and_windows_line_endings(self):
+        secrets = load_secrets(None, {"TELEGRAM_BOT_TOKEN": "123:abc\r", "TELEGRAM_CHAT_ID": '"-100777"',
+                                      "BINANCE_TESTNET_API_KEY": "  key ", "BINANCE_TESTNET_API_SECRET": "'sec'\r\n",
+                                      "TELEGRAM_ALLOWED_USER_IDS": "1, 2\r"})
+        self.assertEqual((secrets.telegram_token, secrets.telegram_chat_id, secrets.api_key, secrets.api_secret),
+                         ("123:abc", "-100777", "key", "sec"))
+        self.assertEqual(secrets.telegram_allowed_users, ("1", "2"))
+
     def test_secrets_env_wins_over_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
