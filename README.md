@@ -118,6 +118,10 @@ Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomat
 
 Bot yalnızca `TELEGRAM_CHAT_ID`'deki sohbeti dinler ve oraya yazar; başka sohbetlerden gelen komutları yok sayar.
 
+**Mesaj freni:** Hangi nedenle olursa olsun sohbete dakikada en fazla 12, saatte en fazla 80 mesaj gider; aynı metin 30 saniyede en fazla 2 kez.
+Sınır aşılırsa fazlası bastırılır ve tek bir uyarı gelir (log'da `Telegram flood brake` satırı görünür). Yeniden başlatmada, bot kapalıyken
+yazılmış eski komutlar (`/pause`, `/positions` ...) **çalıştırılmaz**, atılır.
+
 ## Ayarlar
 
 `config/settings.toml` (hepsi isteğe bağlı; varsayılanlar kod içinde). Hatalı değerler başlangıçta reddedilir.
@@ -209,7 +213,7 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 ## Geliştirme
 
 ```bash
-python -m unittest discover -s tests -v    # 96 test; ağ gerektirmez
+python -m unittest discover -s tests -v    # 107 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
 

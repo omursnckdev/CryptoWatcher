@@ -1,4 +1,5 @@
 """Telegram notifications (Turkish) and command polling. Uses the plain Bot API over HTTPS."""
+from collections import deque
 from datetime import datetime, timezone
 import html
 import logging
@@ -42,12 +43,19 @@ def split_message(text: str, limit: int = LIMIT) -> list[str]:
 class TelegramNotifier:
     """Never raises: a Telegram outage must not stop trading. Falls back to logging if unconfigured."""
 
-    def __init__(self, token: str = "", chat_id: str = "", session=None, sleep=time.sleep, timeout: float = 15.0):
+    # Flood brake: whatever the cause (a loop, a replayed backlog, a restart storm) the chat never receives more than this.
+    MAX_PER_MINUTE, MAX_PER_HOUR, DUPLICATES_ALLOWED, DUPLICATE_WINDOW, NOTICE_EVERY = 12, 80, 2, 30.0, 600.0
+
+    def __init__(self, token: str = "", chat_id: str = "", session=None, sleep=time.sleep, timeout: float = 15.0,
+                 clock=time.time):
         self.token, self.chat_id = token, str(chat_id)
-        self.session, self._sleep, self.timeout = session or make_session(), sleep, timeout
+        self.session, self._sleep, self.timeout, self.clock = session or make_session(), sleep, timeout, clock
         self.sent: list[str] = []
         self._rejected = False
         self.username = ""
+        self._times: deque[float] = deque()          # send times within the last hour
+        self._recent: dict[str, deque[float]] = {}   # text -> send times within DUPLICATE_WINDOW
+        self._suppressed, self._notice_at = 0, float("-inf")
 
     @property
     def configured(self) -> bool:
@@ -79,7 +87,37 @@ class TelegramNotifier:
             return None
         return None
 
+    def _allow(self, text: str) -> bool:
+        now = self.clock()
+        while self._times and self._times[0] <= now - 3600:
+            self._times.popleft()
+        last_minute = sum(1 for t in self._times if t > now - 60)
+        same = self._recent.setdefault(text, deque())
+        while same and same[0] <= now - self.DUPLICATE_WINDOW:
+            same.popleft()
+        if len(self._recent) > 200:                  # forget texts that are no longer inside the window
+            self._recent = {k: v for k, v in self._recent.items() if v and v[-1] > now - self.DUPLICATE_WINDOW}
+        if len(same) >= self.DUPLICATES_ALLOWED or last_minute >= self.MAX_PER_MINUTE or len(self._times) >= self.MAX_PER_HOUR:
+            return False
+        same.append(now)
+        self._times.append(now)
+        return True
+
     def send(self, text: str) -> bool:
+        if not self._allow(text):
+            self._suppressed += 1
+            if self._suppressed in (1, 10) or self._suppressed % 100 == 0:
+                log.warning("Telegram flood brake: %d message(s) suppressed (latest: %.60s)", self._suppressed,
+                            re.sub(r"<[^>]+>", "", text).replace("\n", " | "))
+            now = self.clock()
+            if now - self._notice_at >= self.NOTICE_EVERY:
+                self._notice_at, count, self._suppressed = now, self._suppressed, 0
+                self._transmit(f"⚠️ Çok fazla mesaj: {count} mesaj bastırıldı (dakikada {self.MAX_PER_MINUTE}, saatte "
+                               f"{self.MAX_PER_HOUR} sınırı). Botun loguna bakın.")
+            return False
+        return self._transmit(text)
+
+    def _transmit(self, text: str) -> bool:
         self.sent.append(text)
         log.info("NOTIFY %s", re.sub(r"<[^>]+>", "", text).replace("\n", " | "))
         if not self.configured:
@@ -93,6 +131,20 @@ class TelegramNotifier:
                                                    "disable_web_page_preview": True})
             ok &= sent is not None
         return ok
+
+    def skip_backlog(self, offset: int) -> int:
+        """Drop every command that piled up while the bot was down. -> the offset to continue from.
+
+        Replaying hours-old /pause, /resume or /positions after a restart is never what the user wants."""
+        if not self.configured:
+            return offset
+        data = self._call("getUpdates", {"offset": -1, "timeout": 0, "allowed_updates": ["message"]})
+        results = (data or {}).get("result", [])
+        if not results:
+            return offset
+        newest = max(u["update_id"] for u in results) + 1
+        self._call("getUpdates", {"offset": newest, "timeout": 0, "allowed_updates": ["message"]})   # confirms, so Telegram forgets
+        return max(offset, newest)
 
     def set_commands(self, commands: list[tuple[str, str]]):
         """Show the command menu in Telegram. Best effort."""

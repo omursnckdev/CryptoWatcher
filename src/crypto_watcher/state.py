@@ -1,9 +1,12 @@
 """Crash-safe JSON state: open trades, cooldowns, daily PnL, dedupe markers."""
 from pathlib import Path
 import json
+import logging
 import os
 import tempfile
+import time
 
+log = logging.getLogger(__name__)
 HISTORY_LIMIT = 50
 
 
@@ -27,19 +30,43 @@ class StateStore:
     def __setitem__(self, key, value):
         self.data[key] = value
 
-    def save(self):
+    def check_writable(self):
+        """Fail fast at startup: a bot that cannot persist its state forgets its trades after a restart."""
         if self.path is None:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".state-", suffix=".tmp")
         try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".probe-", suffix=".tmp")
+            os.close(fd)
+            Path(tmp).unlink()
+        except OSError as error:
+            raise RuntimeError(f"State directory {self.path.parent} is not writable ({error}). "
+                               "With Docker, use the named volume from docker-compose.yml.") from error
+
+    def save(self) -> bool:
+        """Never raises for I/O problems (a full disk must not kill a bot that guards open positions); returns success."""
+        if self.path is None:
+            return True
+        tmp = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".state-", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(self.data, handle, ensure_ascii=False, indent=1)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
+            return True
+        except OSError as error:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+            if time.time() - getattr(self, "_save_warned", 0) > 60:
+                self._save_warned = time.time()
+                log.error("Could not save state to %s: %s (continuing with in-memory state)", self.path, error)
+            return False
         except BaseException:
-            Path(tmp).unlink(missing_ok=True)
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
             raise
 
     def record_close(self, record: dict):

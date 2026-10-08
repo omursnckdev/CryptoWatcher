@@ -40,6 +40,7 @@ class Bot:
 
     # ---- lifecycle ----------------------------------------------------------
     def start(self):
+        self.state.check_writable()
         self.infos = parse_exchange_info(self.venue.exchange_info())
         if self.executor:
             self.executor.infos = self.infos
@@ -47,6 +48,8 @@ class Bot:
         self._refresh_universe(force=True)
         self.notify.username = self.notify.whoami() if self.notify.configured else ""
         self.notify.set_commands(MENU)
+        self.state["tg_offset"] = self.notify.skip_backlog(self.state["tg_offset"])   # never replay old commands after a restart
+        self.state.save()
         balance = None
         if self.executor:
             balance = self.executor.balance()
