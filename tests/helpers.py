@@ -23,6 +23,7 @@ class FakeExchange:
         self.pos, self.algos, self.fills, self.calls = {}, {}, [], []
         self.fail_algo, self.hedge, self.leverage = set(), False, {}
         self.reject_leverage_above = None
+        self.forced, self.force_error = [], None
 
     # -- helpers
     def _log(self, *call):
@@ -75,6 +76,11 @@ class FakeExchange:
             rows.append({"symbol": s, "positionAmt": str(p["amt"]), "entryPrice": str(p["entry"]), "markPrice": str(mark),
                          "unRealizedProfit": str((mark - p["entry"]) * p["amt"])})
         return rows
+
+    def force_orders(self, symbol, start_ms, limit=50):
+        if self.force_error:
+            raise self.force_error
+        return [o for o in self.forced if o["symbol"] == symbol and o["time"] >= start_ms]
 
     def user_trades(self, symbol, start_ms, limit=100):
         return [f for f in self.fills if f["symbol"] == symbol and f["time"] >= start_ms]
@@ -149,6 +155,18 @@ class FakeExchange:
         self._log("cancel_all", symbol)
 
     # -- simulation
+    def liquidate(self, symbol, price, auto_close_type=None):
+        """The exchange closes the position by force at `price` (a gap through the stop); stop/TP orders never trigger."""
+        pos = self.pos[symbol]
+        side = "SELL" if pos["amt"] > 0 else "BUY"
+        qty = abs(pos["amt"])
+        self.prices[symbol] = price
+        self._fill(symbol, side, qty, price)
+        order = {"symbol": symbol, "side": side, "origQty": str(qty), "avgPrice": str(price), "time": int(self.clock() * 1000)}
+        if auto_close_type:
+            order["autoCloseType"] = auto_close_type
+        self.forced.append(order)
+
     def move(self, symbol, price):
         self.prices[symbol] = price
         for algo in list(self.algos.values()):

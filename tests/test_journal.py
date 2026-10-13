@@ -67,6 +67,8 @@ class DiagnoseTests(unittest.TestCase):
         self.assertEqual(self.kind(reason="BREAKEVEN_STOP", r=-0.1, mfe_r=1.2), "breakeven")
         self.assertEqual(self.kind(reason="TIME_STOP", r=-0.2), "time")
         self.assertEqual(self.kind(reason="EXTERNAL", r=-0.2), "external")
+        self.assertEqual(self.kind(reason="LIQUIDATION", r=-11.0), "forced")
+        self.assertEqual(self.kind(reason="ADL", r=-3.0), "forced")
         self.assertEqual(self.kind(reason="STOP_LOSS", r=None), "unknown")
 
 
@@ -268,6 +270,21 @@ class ExecutorIntegrationTests(Base):
         self.assertEqual((rec["side"], rec["kind"]), ("SHORT", "win"))
         self.assertGreaterEqual(rec["mfe_r"], 1.9)
         self.assertIn("hedefe/kâra ulaştı", self.messages())
+
+    def test_liquidation_is_journaled_as_forced_without_a_stop_verdict(self):
+        t = self.open("XRPUSDT")
+        self.ex.liquidate("XRPUSDT", t["entry"] * 1.21)
+        self.executor.manage()
+        (rec,) = self.journal.records
+        self.assertEqual((rec["reason"], rec["kind"]), ("LIQUIDATION", "forced"))
+        self.assertLess(rec["r"], -5)
+        self.assertIn("borsa zorla kapattı", self.messages())
+        self.clock.now += 40 * 3600
+        class Market:
+            def klines(self, *a, **k):
+                raise AssertionError("a forced close needs no stop verdict")
+        self.journal.followups(Market())
+        self.assertIsNone(self.journal.records[0]["after"])
 
     def test_failing_journal_never_blocks_closing(self):
         class Broken(jr.Journal):

@@ -201,6 +201,11 @@ class TradingClient(MarketClient):
     def user_trades(self, symbol: str, start_ms: int, limit: int = 100) -> list[dict]:
         return self._signed("GET", "/fapi/v1/userTrades", {"symbol": symbol, "startTime": start_ms, "limit": limit})
 
+    def force_orders(self, symbol: str, start_ms: int, limit: int = 50) -> list[dict]:
+        """The account's liquidation / auto-deleveraging orders for a symbol (empty when none)."""
+        rows = self._signed("GET", "/fapi/v1/forceOrders", {"symbol": symbol, "startTime": start_ms, "limit": limit})
+        return rows if isinstance(rows, list) else []
+
     # ---- orders ----------------------------------------------------------
     def market_order(self, symbol: str, side: str, quantity: float, reduce_only: bool = False,
                      client_id: str | None = None) -> dict:

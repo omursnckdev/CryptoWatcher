@@ -266,6 +266,10 @@ class Bot:
         if self.report:
             line += f" · BTC {tg.esc(self.report['market_regime'])} · {len(self.universe)} coin · veri {tg.esc(self.source)}"
         if self.executor:
+            if self.executor.daily_loss_locked():
+                realized = self.state["daily"].get("realized", 0.0)
+                line += (f"\n🔒 Günlük zarar limiti doldu ({realized:+.2f} USDT): yeni işlem açılmaz, mevcutlar yönetilir. "
+                         "Yeni UTC gününde (TR saatiyle 03:00) otomatik açılır.")
             try:
                 balance = self.executor.balance()
                 line += f"\nBakiye {tg.money(balance['wallet'])} USDT · açık PnL {balance['unrealized']:+.2f} (/positions)"

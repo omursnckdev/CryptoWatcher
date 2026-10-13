@@ -32,6 +32,7 @@ KIND_TEXT = {
     "breakeven": "başa baş stop çalıştı",
     "time": "süre doldu, yön oluşmadı",
     "external": "dışarıdan kapandı",
+    "forced": "borsa zorla kapattı (fiyat stopu atladı)",
     "unknown": "veri yetersiz",
 }
 STOP_TEXT = {
@@ -76,6 +77,8 @@ def diagnose(record: dict) -> str:
         return "unknown"
     if reason == "TAKE_PROFIT" or r > 0.3:
         return "win"
+    if reason in ("LIQUIDATION", "ADL"):
+        return "forced"
     if reason == "EXTERNAL":
         return "external"
     if reason == "TIME_STOP":
@@ -195,7 +198,7 @@ class Journal:
         now_ms = int(self._clock() * 1000)
         changed, errors = False, []
         for record in self.records:
-            if record.get("after") is not None or record.get("kind") in ("win", "external", "unknown"):
+            if record.get("after") is not None or record.get("kind") in ("win", "external", "unknown", "forced"):
                 continue
             if now_ms < record["closed_ms"] + FOLLOWUP_HOURS * HOUR_MS + 5 * 60_000:
                 continue

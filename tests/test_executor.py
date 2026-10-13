@@ -241,6 +241,40 @@ class LifecycleTests(Base):
         self.executor.manage()
         self.assertEqual(self.state["history"][-1]["reason"], "EXTERNAL")
 
+    def test_liquidation_is_named_as_such_and_not_as_external(self):
+        trade = self.open("XRPUSDT")                                   # SHORT
+        self.clock.now += 3600
+        self.ex.liquidate("XRPUSDT", trade["entry"] * 1.21)          # gaps far through the stop
+        self.executor.manage()
+        record = self.state["history"][-1]
+        self.assertEqual(record["reason"], "LIQUIDATION")
+        self.assertLess(record["pnl"], -5 * trade["planned_risk"])
+        self.assertIn("likidasyon", self.messages())
+        self.assertNotIn("dışarıdan", self.messages())
+        self.assertEqual(self.state["trades"], {})
+
+    def test_adl_is_named_separately(self):
+        trade = self.open("XRPUSDT")
+        self.ex.liquidate("XRPUSDT", trade["entry"] * 1.2, auto_close_type="ADL")
+        self.executor.manage()
+        self.assertEqual(self.state["history"][-1]["reason"], "ADL")
+        self.assertIn("ADL", self.messages())
+
+    def test_force_order_lookup_failure_falls_back_to_normal_classification(self):
+        trade = self.open("DOGEUSDT")
+        self.ex.force_error = BinanceError("not available", -1000, 500)
+        self.ex.move("DOGEUSDT", trade["stop"] * 0.999)
+        self.executor.manage()
+        self.assertEqual(self.state["history"][-1]["reason"], "STOP_LOSS")
+
+    def test_an_older_liquidation_does_not_relabel_a_later_trade(self):
+        self.ex.forced.append({"symbol": "DOGEUSDT", "time": int(self.clock() * 1000) - 7_200_000, "side": "BUY"})
+        self.ex.force_orders = lambda symbol, start_ms, limit=50: list(self.ex.forced)   # an endpoint that ignores startTime
+        trade = self.open("DOGEUSDT")
+        self.ex.move("DOGEUSDT", trade["stop"] * 0.999)
+        self.executor.manage()
+        self.assertEqual(self.state["history"][-1]["reason"], "STOP_LOSS")
+
     def test_missing_fills_are_retried_then_reported_without_pnl(self):
         trade = self.open("DOGEUSDT")
         self.ex.pos.clear()          # position vanished, no fills available
@@ -322,6 +356,24 @@ class BotTests(Base):
         bot.tick()
         self.assertFalse(self.state["paused"])
         self.assertEqual(len(self.state["trades"]), 3)
+
+    def test_status_explains_the_daily_loss_lock(self):
+        bot = self.make_bot()
+        self.assertNotIn("🔒", bot._answer("/status"))
+        self.state["daily"]["realized"] = -0.05 * 10_000 - 1           # beyond 5% of min(equity, capital_usdt)
+        reply = bot._answer("/status")
+        self.assertIn("🔒 Günlük zarar limiti doldu (-501.00 USDT)", reply)
+        self.assertIn("03:00", reply)
+        self.state["daily"]["realized"] = -100.0
+        self.assertNotIn("🔒", bot._answer("/status"))
+
+    def test_lock_message_survives_scans_in_status_even_though_loop_errors_are_cleared(self):
+        bot = self.make_bot()
+        self.state["daily"]["realized"] = -600.0
+        bot.tick()                                                      # a scan runs: nothing may be opened
+        self.assertEqual(self.state["trades"], {})
+        self.assertIsNone(self.state["last_error"])                     # the old, invisible place for the message
+        self.assertIn("🔒", bot._answer("/status"))
 
     def test_positions_command_shows_live_pnl(self):
         bot = self.make_bot()

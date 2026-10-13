@@ -224,6 +224,15 @@ Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim
 - Özellik açıldığından önce kapanan işlemler günlükte yoktur (o zaman bu veriler tutulmuyordu). Emir göndermez, hata verirse işlem akışını etkilemez.
   `journal_enabled = false` ile kapatılır. Dosya: `sudo docker compose exec cryptowatcher cat /app/state/journal.jsonl`.
 
+## Likidasyon ve "günlük zarar kilidi"
+
+- Fiyat stopu **atlayıp** (özellikle testnet'in ince emir defterinde) likidasyon fiyatına sıçrarsa borsa pozisyonu zorla kapatır; stop emri hiç tetiklenmez
+  ve kayıp 1R yerine marjın tamamına (yaklaşık 10R ya da daha fazlası) çıkabilir. Bot bunu `forceOrders` kaydından tanır ve kapanışı
+  **"likidasyon (fiyat stopu atladı)"** ya da **"ADL"** olarak bildirir (eskiden "dışarıdan kapandı" yazıyordu); işlem günlüğünde ayrı bir sınıftır.
+  Binance'te ardından, sıfır büyüklükte ve eksi *isolated margin*'li bir satır kalabilir: kapatılacak pozisyon yoktur, görüntü kalıntısıdır.
+- Günlük zarar (başlangıç sermayesinin %5'i) dolunca bot UTC gün sonuna kadar **yeni işlem açmaz** (açıklar yönetilmeye devam eder). Bu artık `/status`
+  cevabında `🔒 Günlük zarar limiti doldu` satırıyla görünür; yeni UTC gününde (Türkiye saatiyle 03:00) kilit kendiliğinden kalkar.
+
 ## Atlanan sinyaller (`/atlanan`)
 
 "Aynı yönde en fazla 3 pozisyon" gibi limitler riski sınırlar ama iyi bir fırsatı da kaçırtabilir. Bunu tahminle değil veriyle görmek için bot

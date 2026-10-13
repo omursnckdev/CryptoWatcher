@@ -12,7 +12,8 @@ log = logging.getLogger(__name__)
 LIMIT = 4000  # Telegram caps messages at 4096 characters
 
 SHORT_REASONS = {"STOP_LOSS": "stop", "TAKE_PROFIT": "hedef", "BREAKEVEN_STOP": "başa baş stop",
-                 "TIME_STOP": "zaman stopu", "EXTERNAL": "dışarıdan kapandı"}
+                 "TIME_STOP": "zaman stopu", "EXTERNAL": "dışarıdan kapandı",
+                 "LIQUIDATION": "⚠️ likidasyon (fiyat stopu atladı)", "ADL": "⚠️ ADL (borsa zorla azalttı)"}
 
 
 def esc(value) -> str:

@@ -241,7 +241,22 @@ class Executor:
         if self.s.notify_breakeven:
             self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
 
+    def _forced_close(self, trade: dict) -> str | None:
+        """LIQUIDATION / ADL when the exchange itself closed the position (price gapped through the stop), else None."""
+        try:
+            rows = self.client.force_orders(trade["symbol"], trade["opened_ms"] - 5000)
+        except BinanceError as error:   # an unavailable endpoint must not hide the normal classification
+            log.warning("Force-order lookup failed for %s: %s", trade["symbol"], error)
+            return None
+        rows = [r for r in rows if int(r.get("time", r.get("updateTime", 0)) or 0) >= trade["opened_ms"] - 5000]
+        if not rows:
+            return None
+        return "ADL" if any(str(r.get("autoCloseType", "")).upper() == "ADL" for r in rows) else "LIQUIDATION"
+
     def _classify(self, trade: dict, exit_price: float | None) -> str:
+        forced = self._forced_close(trade)
+        if forced:
+            return forced
         for key, reason in (("sl_id", "BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS"),
                             ("tp_id", "TAKE_PROFIT")):
             if not trade.get(key):
