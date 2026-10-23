@@ -52,6 +52,32 @@ def journal():
     if not os.path.exists(p): print("günlük yok"); return
     for line in open(p).read().splitlines()[-3:]:
         r = json.loads(line); print(r["symbol"], r["side"], r["reason"], "R", r["r"], "en iyi", r["mfe_r"], "en kötü", r["mae_r"], "tutma(sa)", r["hold_h"], "stop", r.get("initial_stop"), "çıkış", r["exit"])
+
+def tracked_orders():
+    """For every trade the bot tracks: what the exchange says about the bot's own stop / take-profit order ids."""
+    s = json.load(open("/app/state/state.json"))
+    for symbol, tr in s["trades"].items():
+        print(f"{symbol} {tr['side']} giriş {tr['entry']} · açılış {t(tr['opened_ms'])} · kayıtlı stop {tr['stop']} (başabaş {tr['breakeven_done']}) · TP {tr['take_profit']}")
+        for key in ("sl_id", "tp_id"):
+            cid = tr.get(key)
+            if not cid:
+                print(f"   {key}: kayıtlı değil"); continue
+            try:
+                o = c.get_algo_order(cid)
+                extra = {k: v for k, v in o.items() if any(w in k.lower() for w in ("reason", "msg", "error"))}
+                print(f"   {key}: {o.get('algoStatus')} · {o.get('orderType')} {o.get('side')} tetik {o.get('triggerPrice')} miktar {o.get('quantity')} "
+                      f"closePos {o.get('closePosition')} reduceOnly {o.get('reduceOnly')} · oluşturma {t(o['createTime']) if o.get('createTime') else '?'} "
+                      f"· güncelleme {t(o['updateTime']) if o.get('updateTime') else '?'} {extra or ''}")
+            except BinanceError as e:
+                print(f"   {key}: sorgulanamadı ({e})")
+def algo_history():
+    rows = c._signed("GET", "/fapi/v1/allAlgoOrders", {"symbol": SYM, "limit": 20})
+    rows = rows if isinstance(rows, list) else rows.get("orders", [])
+    for o in rows[-10:]:
+        print(t(o.get("createTime", 0)), o.get("orderType"), o.get("side"), o.get("algoStatus"), "tetik", o.get("triggerPrice"), "miktar", o.get("quantity"),
+              "closePos", o.get("closePosition"), "güncelleme", t(o["updateTime"]) if o.get("updateTime") else "?")
+    if not rows: print("kayıt yok")
+
 tryit("pozisyon (ham)", pos)
 tryit("Bekleyen koşullu emirler (tüm semboller)", algos)
 tryit("bekleyen normal emirler", orders)
@@ -60,3 +86,5 @@ tryit("Zorla kapatma / likidasyon kayıtları", force)
 tryit("gelir geçmişi", income)
 tryit("Botun durumu", state)
 tryit("İşlem günlüğü (son 3)", journal)
+tryit("Botun izlediği işlemlerin stop/TP emirleri (borsadaki durumları)", tracked_orders)
+tryit(f"{SYM} koşullu emir geçmişi (son 10)", algo_history)
