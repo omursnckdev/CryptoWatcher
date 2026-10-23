@@ -62,8 +62,41 @@ class ReportTests(unittest.TestCase):
         coin_rows = [l.split() for l in text.split("Coin bazında")[1].splitlines() if l.startswith("  ") and "işlem" in l]
         self.assertEqual([(c[0], c[1]) for c in coin_rows], [("BBBUSDT", "3")])         # coin table needs >= 3 trades
         self.assertNotIn("<b>", text)                                       # telegram markup stripped
-        days = [l for l in text.splitlines() if re.match(r"  \d\d-\d\d ", l)]
+        days = [l for l in text.split("Gün gün")[1].split("Coin bazında")[0].splitlines() if re.match(r"  \d\d-\d\d ", l)]
         self.assertEqual(len(days), 3)
+
+    def test_group_table_unusual_closes_and_shadow_concentration(self):
+        journal = jr.Journal(self.path / "journal.jsonl")
+        journal.add(trade(1, "HYPEUSDT", "SHORT", "EXTERNAL", -11.0, -560.0, "external", mae=-11.0))
+        journal.add(trade(2, "AAAUSDT", "LONG", "STOP_LOSS", -1.07, -53.0, "never_worked"))
+        journal.add(trade(3, "CCCUSDT", "LONG", "TIME_STOP", 0.4, 20.0, "win"))
+        lines = []
+        for i in range(12):                                    # 12 skipped signals on 12 days, +1.0R each (one good day: +10R)
+            day = 1_790_000_000_000 + i * DAY
+            lines.append({"k": "sig", "id": f"s{i}", "symbol": "AAAUSDT", "side": "LONG", "date": str(i), "seen_ms": day,
+                          "distance_frac": 0.02, "score": 75.0, "status": "toplam pozisyon limiti", "trade_id": None})
+            lines.append({"k": "res", "id": f"s{i}", "net_r": 10.0 if i == 0 else 0.0, "exit": "TP"})
+        (self.path / "signals.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines))
+        events = [{"k": "start", "ms": 1_790_000_000_000}]
+        hour0 = 1_790_000_000_000 // 3_600_000 * 3_600_000
+        for i in range(10):                                    # 10 events on day 1 at +100 bp, one event on each of days 2..7 at -50 bp
+            events += [{"k": "event", "id": f"A{i}-{hour0}", "symbol": f"A{i}USDT", "hour": hour0}, 
+                       {"k": "outcome", "id": f"A{i}-{hour0}", "H": 24, "gross": 114.0, "fund": 0.0, "net": 100.0}]
+        for d in range(1, 7):
+            events += [{"k": "event", "id": f"B{d}-x", "symbol": f"B{d}USDT", "hour": hour0 + d * DAY},
+                       {"k": "outcome", "id": f"B{d}-x", "H": 24, "gross": -36.0, "fund": 0.0, "net": -50.0}]
+        (self.path / "shadow.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        text = report_tool.report(self.path)
+        unusual = text.split("Olağandışı kapanışlar")[1].split("========")[1]
+        self.assertIn("HYPEUSDT", unusual)
+        self.assertIn("CCCUSDT", unusual)                       # time stop is listed
+        self.assertNotIn("AAAUSDT", unusual)                    # a plain -1.07R stop is not unusual
+        group = [l for l in text.split("grup tablosu")[1].splitlines() if l.startswith("toplam pozisyon limiti")][0].split()
+        self.assertIn("%100", group)                            # the best day holds all of the profit
+        self.assertEqual(group[4:6], ["12", "+0.83"])                    # n, days, mean R (10R spread over 12 signals)
+        # pooled mean (10*100 + 6*(-50)) / 16 = +44 bp, but the mean of the 7 daily means is (100 - 6*50) / 7 = -29 bp
+        self.assertIn("olay ortalaması +44 bp · günlük ortalamaların ortalaması -29 bp", text)
+        self.assertIn("en yoğun gün (09-21) tüm olayların %62'ini oluşturuyor; o günü çıkarınca olay ortalaması -50 bp", text)
 
     def test_shadow_file_without_start_line_is_not_modified(self):
         (self.path / "shadow.jsonl").write_text("")
