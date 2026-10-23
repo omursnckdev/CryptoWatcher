@@ -224,6 +224,20 @@ Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim
 - Özellik açıldığından önce kapanan işlemler günlükte yoktur (o zaman bu veriler tutulmuyordu). Emir göndermez, hata verirse işlem akışını etkilemez.
   `journal_enabled = false` ile kapatılır. Dosya: `sudo docker compose exec cryptowatcher cat /app/state/journal.jsonl`.
 
+## Stop bekçisi (çalışırken koruma)
+
+"Her pozisyonun borsada stopu olsun" kuralı yalnızca açılışta ve başlangıçta değil, **çalışırken de** denetlenir (`stop_guard_enabled`, `guard_interval_seconds = 60`).
+Neden gerekli: borsa bir stopu tetikleyip sonucu takılabilir ya da reddedilebilir (emir `TRIGGERING`/`REJECTED`/`EXPIRED` olur, açık emir listesinden kaybolur),
+bu durumda pozisyon haftalarca stopsuz kalabilir ve "sadece azalt" emirleri de reddedilebilir (`-2022`). Bu gerçekten yaşandı (BTC ve UNI, 10-19).
+
+- Her dakika botun kayıtlı stop ve hedef emirlerinin borsada canlı olup olmadığına bakılır. **İki ardışık kontrol** aynı sonucu verirse harekete geçilir.
+- **Stop yoksa:** fiyat stopun gerisindeyse pozisyon hemen kapatılır; değilse stop yeniden konur (`🛡 ... stop yeniden kondu` mesajı). Emir kabul edilmezse
+  `KORUMASIZ POZİSYON` uyarısı gelir; **3 denemede** kurulamazsa pozisyon kapatılır (`GUARD_CLOSE`).
+- **Hedef yoksa:** sessizce yeniden konur; fiyat hedefe ulaşmışsa pozisyon kapatılır.
+- **Kapatma merdiveni** (zaman stopu, acil kapatma ve bekçi için ortak): önce sadece-azalt piyasa emri; reddedilirse pozisyonu borsadan **yeniden okuyup**
+  tam o miktar ve yönde normal piyasa emri gönderir. Pozisyon artık yoksa ya da yön değişmişse hiçbir şey göndermez (ters pozisyon açılmaz).
+  Hepsi başarısızsa 60 sn arayla yeniden dener, Telegram uyarısı 30 dakikada bir gönderilir.
+
 ## Likidasyon ve "günlük zarar kilidi"
 
 - Fiyat stopu **atlayıp** (özellikle testnet'in ince emir defterinde) likidasyon fiyatına sıçrarsa borsa pozisyonu zorla kapatır; stop emri hiç tetiklenmez

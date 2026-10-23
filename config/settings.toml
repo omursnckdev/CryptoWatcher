@@ -46,6 +46,8 @@ notify_breakeven = true        # false: stop başa çekilince mesaj atma
 
 # --- gölge kayıt ---------------------------------------------------------
 # Emir açmadan, dondurulmuş bir hipotezi (OI çöküşü + fiyat düştü -> LONG) kaydeder; sonuçlar /golge ile görülür.
+stop_guard_enabled = true
+guard_interval_seconds = 60
 journal_enabled = true
 signal_log_enabled = true
 shadow_enabled = true

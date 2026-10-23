@@ -69,6 +69,8 @@ class Settings:
     # --- telegram ----------------------------------------------------
     telegram_verbose: bool = False     # add reasons, headlines, margin and liquidation price to messages
     notify_breakeven: bool = True      # message when a trade is revised (stop moved to breakeven)
+    stop_guard_enabled: bool = True    # while running: re-place a stop/TP that vanished from the exchange; close the position if that fails
+    guard_interval_seconds: int = 60
     journal_enabled: bool = True       # keep a per-trade journal (entry context, best/worst excursion, post-close follow-up) for /analiz
     signal_log_enabled: bool = True    # replay signals that position limits blocked, on real candles (no orders, no pushes)
     shadow_enabled: bool = True        # record the frozen "OI collapse + price down -> LONG" hypothesis (no orders, no pushes)
@@ -107,7 +109,7 @@ class Settings:
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
         for name in ("kline_limit", "max_symbols", "leverage", "max_open_positions", "max_same_direction",
-                     "scan_interval_seconds", "manage_interval_seconds", "command_poll_seconds", "universe_refresh_minutes",
+                     "scan_interval_seconds", "manage_interval_seconds", "command_poll_seconds", "universe_refresh_minutes", "guard_interval_seconds",
                      "news_cache_minutes", "risk_fraction", "max_margin_fraction", "atr_stop_multiplier",
                      "tp_r", "minimum_rr", "taker_fee", "news_max_age_hours"):
             if getattr(self, name) <= 0:

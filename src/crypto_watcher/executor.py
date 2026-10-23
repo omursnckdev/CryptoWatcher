@@ -18,6 +18,7 @@ from . import telegram as tg
 
 log = logging.getLogger(__name__)
 DEAD_ALGO = {"NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+RESTORE_ATTEMPTS = 3          # failed attempts to place a vanished stop again before the position is closed instead
 
 
 def client_id(kind: str, symbol: str, ms: int) -> str:
@@ -33,6 +34,7 @@ class Executor:
     def __init__(self, client, settings: Settings, state, notifier, infos: dict[str, SymbolInfo], clock=time.time, journal=None):
         self.client, self.s, self.state, self.notify = client, settings, state, notifier
         self.infos, self._clock, self.journal = infos, clock, journal
+        self._guard_at = 0.0
 
     # ---- account / limits -------------------------------------------------
     def prepare(self):
@@ -174,11 +176,72 @@ class Executor:
         return trade
 
     def _emergency_close(self, symbol: str, exit_side: str, quantity: float, reason: str):
-        try:
-            self.client.market_order(symbol, exit_side, quantity, reduce_only=True)
-            self.notify.send(tg.fmt_warning(f"{symbol}: {reason}"))
-        except BinanceError as error:
+        closed, fallback, error = self._close_now(symbol)
+        if closed:
+            self.notify.send(tg.fmt_warning(f"{symbol}: {reason}" + (" (sadece-azalt emri reddedildi, normal piyasa emriyle kapatıldı)" if fallback else "")))
+        else:
             self.notify.send(tg.fmt_warning(f"{symbol}: KORUMASIZ POZİSYON! {reason} Kapatma da başarısız: {error}. Elle müdahale edin."))
+
+    def _close_now(self, symbol: str) -> tuple[bool, bool, str | None]:
+        """Close the whole position at market. -> (closed, used_plain_order, last_error).
+
+        1. reduce-only market order (cannot flip the position);
+        2. if the exchange rejects that (e.g. -2022 while a stuck conditional order holds the position), re-read the position and send a
+           plain market order for exactly that quantity on the opposite side. Direction and size come from the exchange, never from the
+           bot's own records, and nothing is sent when the position is already gone or has changed direction."""
+        try:
+            live = self.client.positions(symbol)
+            if not live:
+                return True, False, None
+            amount = float(live[0]["positionAmt"])
+            side, quantity = ("SELL" if amount > 0 else "BUY"), abs(amount)
+            try:
+                self.client.market_order(symbol, side, quantity, reduce_only=True)
+                return True, False, None
+            except BinanceError as error:
+                log.warning("Reduce-only close of %s rejected (%s); trying a plain market order", symbol, error)
+                reason = str(error)
+            again = self.client.positions(symbol)
+            if not again:
+                return True, False, None
+            amount2 = float(again[0]["positionAmt"])
+            if amount2 * amount <= 0:                     # direction changed under us: do not touch it
+                return False, False, "pozisyon yönü değişti"
+            self.client.market_order(symbol, side, abs(amount2))
+            return True, True, reason
+        except BinanceError as error:
+            log.error("Could not close %s at market: %s", symbol, error)
+            return False, False, str(error)
+
+    def _critical(self, trade: dict, text: str):
+        """A safety-critical warning, at most once per 30 minutes per trade."""
+        now_ms = int(self._clock() * 1000)
+        log.error("%s", text)
+        if now_ms - trade.get("crit_ms", 0) >= 1_800_000:
+            trade["crit_ms"] = now_ms
+            self.notify.send(tg.fmt_warning(text))
+            self.state.save()
+
+    def _force_close(self, trade: dict, hint: str, hint_first: bool = False) -> bool:
+        """Close the position now and finalize it. Retries are spaced 60 s apart; failures raise a (throttled) warning."""
+        symbol, now_ms = trade["symbol"], int(self._clock() * 1000)
+        if now_ms < trade.get("force_next_ms", 0):
+            return False
+        if hint_first:
+            trade["close_hint"] = hint            # persisted: fills may only become visible on a later tick
+            self.state.save()
+        closed, fallback, error = self._close_now(symbol)
+        if not closed:
+            trade["force_next_ms"] = now_ms + 60_000
+            self.state.save()
+            self._critical(trade, f"{symbol}: pozisyon kapatılamadı ({error}); stop/TP emirlerini kontrol edin, gerekirse elle kapatın.")
+            return False
+        if fallback:
+            self.notify.send(tg.fmt_warning(f"{symbol}: sadece-azalt emri reddedildi ({error}); pozisyon normal piyasa emriyle kapatıldı."))
+        trade["close_hint"] = hint
+        self.state.save()
+        self._finalize(trade)
+        return True
 
     # ---- managing -----------------------------------------------------------
     def manage(self):
@@ -189,6 +252,7 @@ class Executor:
         except BinanceError as error:
             self._alert("manage:positions", f"Pozisyonlar okunamadı: {error}")
             return
+        live_ids = self._live_algo_ids()
         for symbol, trade in list(self.state["trades"].items()):
             try:
                 position = positions.get(symbol)
@@ -198,7 +262,10 @@ class Executor:
                 jr.track(trade, float(position["markPrice"]), int(self._clock() * 1000))
                 if self._time_stop(trade, position):
                     continue
-                self._breakeven(trade, float(position["markPrice"]))
+                if self._breakeven(trade, float(position["markPrice"])):
+                    continue                                   # the stop id changed this tick: judge it on the next pass
+                if live_ids is not None:
+                    self._guard(trade, position, live_ids)
             except BinanceError as error:
                 self._alert(f"manage:{symbol}", f"{symbol} yönetim hatası: {error}")
 
@@ -206,12 +273,91 @@ class Executor:
         hours = self.s.max_hold_hours
         if not hours or self._clock() * 1000 - trade["opened_ms"] < hours * 3_600_000:
             return False
-        exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
-        trade["close_hint"] = "TIME_STOP"  # persisted: fills may only become visible on a later tick
-        self.state.save()
-        self.client.market_order(trade["symbol"], exit_side, abs(float(position["positionAmt"])), reduce_only=True)
-        self._finalize(trade)
+        self._force_close(trade, "TIME_STOP", hint_first=True)
         return True
+
+    # ---- stop guard -------------------------------------------------------------
+    def _live_algo_ids(self) -> set | None:
+        """Client ids of the conditional orders that are alive on the exchange; None when the guard is off, not due, or the lookup failed."""
+        if not self.s.stop_guard_enabled or self._clock() - self._guard_at < self.s.guard_interval_seconds:
+            return None
+        self._guard_at = self._clock()
+        try:
+            return {o.get("clientAlgoId") for o in self.client.open_algo_orders()}
+        except BinanceError as error:
+            self._alert("guard:list", f"Koşullu emirler okunamadı ({error}); stop kontrolü atlandı.")
+            return None
+
+    def _guard(self, trade: dict, position: dict, live_ids: set):
+        """The invariant 'a position always has its exchange-side stop' must hold while running, not just at startup.
+
+        A stop can vanish: the exchange triggered it but the resulting order got stuck or was rejected (status TRIGGERING / REJECTED /
+        EXPIRED), or it was cancelled by hand. Two consecutive passes must agree before acting. Then: price already beyond the stop ->
+        close now; otherwise place the stop again. A missing take-profit is re-placed, or the position is closed if the target is already
+        reached. The bot's own take-profit never blocks the stop and the stop never waits for the take-profit."""
+        symbol, mark = trade["symbol"], float(position["markPrice"])
+        sign = 1 if trade["side"] == "LONG" else -1
+        stop_missing = trade["sl_id"] not in live_ids
+        tp_missing = bool(trade.get("tp_id")) and trade["tp_id"] not in live_ids
+        if not (stop_missing or tp_missing):
+            trade["guard_misses"] = 0
+            return
+        trade["guard_misses"] = trade.get("guard_misses", 0) + 1
+        if trade["guard_misses"] < 2:
+            return
+        if stop_missing:
+            log.warning("Stop of %s %s (%s) is not alive on the exchange (mark %s, stop %s)", symbol, trade["side"], trade["sl_id"], mark, trade["stop"])
+            beyond = sign * (mark - trade["stop"]) <= 0
+            outcome = None if beyond else self._restore_stop(trade, position)
+            if outcome == "placed":
+                return
+            if outcome == "failed" and trade.get("restore_failures", 0) < RESTORE_ATTEMPTS:
+                return                                              # retried on the next pass; the position is only closed after repeated failures
+            hint = "GUARD_CLOSE" if outcome == "failed" else ("BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS")
+            self._force_close(trade, hint)                          # price through the stop, or a stop that cannot be placed again
+            return
+        if sign * (mark - trade["take_profit"]) >= 0:             # the target is already reached but its order is gone
+            self._force_close(trade, "TAKE_PROFIT")
+            return
+        self._restore_target(trade)
+
+    def _restore_stop(self, trade: dict, position: dict) -> str:
+        """Place the stop again. -> 'placed', 'immediate' (price already through it: the order would trigger at once) or 'failed'."""
+        symbol = trade["symbol"]
+        exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
+        new_id = client_id("sl", symbol, int(self._clock() * 1000))
+        try:
+            try:
+                self.client.algo_order(symbol, exit_side, "STOP_MARKET", trade["stop"], new_id)
+            except BinanceError as error:
+                if error.code != -4130:                           # a closePosition stop already exists in that direction
+                    raise
+                self.client.algo_order(symbol, exit_side, "STOP_MARKET", trade["stop"], new_id, quantity=abs(float(position["positionAmt"])))
+        except BinanceError as error:
+            if error.code == -2021:
+                return "immediate"
+            trade["restore_failures"] = trade.get("restore_failures", 0) + 1
+            self.state.save()
+            self._critical(trade, f"{symbol}: KORUMASIZ POZİSYON! Stop emri yeniden konulamadı ({error}); "
+                                  f"{trade['restore_failures']}/{RESTORE_ATTEMPTS} deneme, sonunda pozisyon kapatılacak.")
+            return "failed"
+        trade["sl_id"], trade["guard_misses"], trade["restore_failures"] = new_id, 0, 0
+        self.state.save()
+        self.notify.send(f"🛡 {tg.esc(symbol)} stop yeniden kondu: {tg.price(trade['stop'])}")
+        return "placed"
+
+    def _restore_target(self, trade: dict):
+        symbol = trade["symbol"]
+        exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
+        new_id = client_id("tp", symbol, int(self._clock() * 1000))
+        try:
+            self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", trade["take_profit"], new_id)
+        except BinanceError as error:
+            self._alert(f"guard:tp:{symbol}", f"{symbol}: hedef emri yeniden konulamadı ({error}).")
+            return
+        trade["tp_id"], trade["guard_misses"] = new_id, 0
+        self.state.save()
+        log.info("Take-profit of %s placed again at %s", symbol, trade["take_profit"])
 
     def _breakeven(self, trade: dict, mark: float):
         if not trade["breakeven_r"] or trade["breakeven_done"] or trade["be_failures"] >= 3:
@@ -240,6 +386,7 @@ class Executor:
         self.client.cancel_algo_order(old_id)
         if self.s.notify_breakeven:
             self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
+        return True
 
     def _forced_close(self, trade: dict) -> str | None:
         """LIQUIDATION / ADL when the exchange itself closed the position (price gapped through the stop), else None."""

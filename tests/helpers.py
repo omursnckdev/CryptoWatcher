@@ -24,6 +24,7 @@ class FakeExchange:
         self.fail_algo, self.hedge, self.leverage = set(), False, {}
         self.reject_leverage_above = None
         self.forced, self.force_error = [], None
+        self.reject_reduce_only, self.fail_plain_market, self.algo_list_error = set(), set(), None
 
     # -- helpers
     def _log(self, *call):
@@ -108,6 +109,10 @@ class FakeExchange:
     def market_order(self, symbol, side, quantity, reduce_only=False, client_id=None):
         self._log("market", symbol, side, quantity, reduce_only)
         pos = self.pos.get(symbol)
+        if reduce_only and symbol in self.reject_reduce_only:
+            raise BinanceError("ReduceOnly Order is rejected.", -2022, 400)
+        if not reduce_only and symbol in self.fail_plain_market:
+            raise BinanceError("Margin is insufficient.", -2019, 400)
         if reduce_only and (not pos or pos["amt"] * (1 if side == "BUY" else -1) > 0):
             raise BinanceError("ReduceOnly rejected", -2022, 400)
         self._fill(symbol, side, quantity, self.prices[symbol])
@@ -138,6 +143,9 @@ class FakeExchange:
         return self.algos[client_id]
 
     def open_algo_orders(self, symbol=None):
+        self._log("open_algo_orders", symbol)
+        if self.algo_list_error:
+            raise self.algo_list_error
         return [a for a in self.algos.values() if a["algoStatus"] == "NEW" and (not symbol or a["symbol"] == symbol)]
 
     def cancel_algo_order(self, client_id):
@@ -155,6 +163,10 @@ class FakeExchange:
         self._log("cancel_all", symbol)
 
     # -- simulation
+    def strand(self, client_id, status="TRIGGERING"):
+        """The exchange 'triggered' a conditional order that then never executed: it is no longer open and never fills."""
+        self.algos[client_id]["algoStatus"] = status
+
     def liquidate(self, symbol, price, auto_close_type=None):
         """The exchange closes the position by force at `price` (a gap through the stop); stop/TP orders never trigger."""
         pos = self.pos[symbol]
