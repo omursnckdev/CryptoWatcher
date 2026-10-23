@@ -233,6 +233,19 @@ Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim
 - Günlük zarar (başlangıç sermayesinin %5'i) dolunca bot UTC gün sonuna kadar **yeni işlem açmaz** (açıklar yönetilmeye devam eder). Bu artık `/status`
   cevabında `🔒 Günlük zarar limiti doldu` satırıyla görünür; yeni UTC gününde (Türkiye saatiyle 03:00) kilit kendiliğinden kalkar.
 
+## Sunucuda tam rapor (Telegram'sız)
+
+Bot tüm kayıtları `state/` klasöründe tutar (`state.json`, `journal.jsonl`, `signals.jsonl`, `shadow.jsonl`); Telegram komutları yalnızca bunları özetler.
+Hepsini tek seferde, **salt-okunur** olarak görmek için (hiçbir şey yazmaz, emir vermez, borsaya bağlanmaz):
+
+```bash
+cd ~/CryptoWatcher && git pull
+sudo docker compose exec -T cryptowatcher python - /app/state < tools/report.py
+```
+
+Çıktı: genel durum, işlem günlüğü (R dağılımı, kapanış nedenleri, yön, gün gün ve coin bazında sonuç) ve `/analiz`, `/atlanan`, `/golge` özetleri.
+Belirli bir coini incelemek için: `sudo docker compose exec -T cryptowatcher python - HYPEUSDT < tools/diagnose.py`.
+
 ## Atlanan sinyaller (`/atlanan`)
 
 "Aynı yönde en fazla 3 pozisyon" gibi limitler riski sınırlar ama iyi bir fırsatı da kaçırtabilir. Bunu tahminle değil veriyle görmek için bot

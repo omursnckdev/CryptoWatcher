@@ -255,7 +255,7 @@ class Journal:
             part = [r for r in done if r["side"] == side]
             if part:
                 lines.append(f"• {side}: {len(part)} işlem, ortalama {sum(r['r'] for r in part) / len(part):+.2f}R")
-        for low, high, label in ((0, 75, "skor <75"), (75, 80, "skor 75-80"), (80, 101, "skor ≥80")):
+        for low, high, label in ((0, 75, "skor 70-75"), (75, 80, "skor 75-80"), (80, 101, "skor 80+")):
             part = [r for r in done if r.get("entry_ctx") and low <= r["entry_ctx"]["score"] < high]
             if part:
                 lines.append(f"• {label}: {len(part)} işlem, ortalama {sum(r['r'] for r in part) / len(part):+.2f}R")

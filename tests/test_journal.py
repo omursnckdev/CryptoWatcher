@@ -222,14 +222,24 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("genişletmek zarar büyütür", text)
         self.assertIn("12× stoptan sonra fiyat aleyhe devam etti", text)
 
+    def test_summary_is_valid_telegram_html(self):
+        # a raw "<" outside a tag makes Telegram reject the message (the bot then falls back to ugly plain text)
+        rows = [{"r": -1.0, "side": "SHORT", "entry_ctx": {"score": 72}, "after": {"verdict": "too_tight"}},
+                {"r": 2.0, "side": "LONG", "entry_ctx": {"score": 83}, "reason": "TAKE_PROFIT", "kind": "win", "mfe_r": 2.0},
+                {"r": -11.0, "reason": "LIQUIDATION", "kind": "forced", "mae_r": -11.0}] * 8
+        text = self.make(rows).format_summary()
+        import re
+        self.assertEqual(re.findall(r"<(?!/?(?:b|code)>)", text), [])
+        self.assertEqual(re.findall(r"&(?!amp;|lt;|gt;)", text), [])
+
     def test_side_and_score_buckets_and_last_trades(self):
         rows = [{"r": -1.0, "side": "SHORT", "entry_ctx": {"score": 72}}, {"r": 2.0, "side": "LONG", "entry_ctx": {"score": 83},
                                                                           "reason": "TAKE_PROFIT", "kind": "win", "mfe_r": 2.0}]
         text = self.make(rows).format_summary()
         self.assertIn("SHORT: 1 işlem, ortalama -1.00R", text)
         self.assertIn("LONG: 1 işlem, ortalama +2.00R", text)
-        self.assertIn("skor <75: 1 işlem, ortalama -1.00R", text)
-        self.assertIn("skor ≥80: 1 işlem, ortalama +2.00R", text)
+        self.assertIn("skor 70-75: 1 işlem, ortalama -1.00R", text)
+        self.assertIn("skor 80+: 1 işlem, ortalama +2.00R", text)
         self.assertIn("Son işlemler", text)
 
 
