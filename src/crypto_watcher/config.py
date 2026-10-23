@@ -35,7 +35,9 @@ class Settings:
     entry_score: float = 70.0
     strong_score: float = 80.0
     watch_score: float = 55.0
-    counter_regime_penalty: float = 10.0
+    counter_regime_penalty: float = 10.0       # only used when allow_counter_regime is true
+    allow_counter_regime: bool = False         # backtest 2023-26: trades against the BTC regime lost ~0.12R each
+    min_trend_extension_atr: float = 2.0       # close must be this many ATR beyond EMA20 in the trade direction (0 = off)
     allow_long: bool = True
     allow_short: bool = True
     max_drift_atr: float = 1.0
@@ -53,8 +55,8 @@ class Settings:
     max_open_positions: int = 5
     max_same_direction: int = 3
     max_daily_loss_fraction: float = 0.05
-    atr_stop_multiplier: float = 2.0
-    tp_r: float = 2.0
+    atr_stop_multiplier: float = 3.0   # wider stop: fees + slippage cost ~0.03R instead of ~0.05R per trade
+    tp_r: float = 3.0
     minimum_rr: float = 1.5
     breakeven_r: float = 1.0           # move stop to entry after +1R; 0 disables
     max_hold_hours: float = 48.0       # 0 disables
@@ -105,7 +107,7 @@ class Settings:
             elif field.type == tuple[str, ...]:
                 if not isinstance(value, tuple) or not all(isinstance(v, str) for v in value):
                     raise ValueError(f"{field.name} must be an array of strings")
-        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "max_drift_atr"):
+        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "max_drift_atr", "min_trend_extension_atr"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
         for name in ("kline_limit", "max_symbols", "leverage", "max_open_positions", "max_same_direction",

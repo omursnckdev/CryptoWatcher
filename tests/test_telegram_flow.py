@@ -9,7 +9,7 @@ from crypto_watcher.data import DemoProvider
 from crypto_watcher.executor import Executor
 from crypto_watcher.state import StateStore
 from crypto_watcher.telegram import TelegramNotifier
-from helpers import Clock, FakeExchange, make_infos
+from helpers import Clock, FakeExchange, make_infos, legacy_settings
 
 
 class FakeBotApi:
@@ -45,7 +45,7 @@ class FlowBase(unittest.TestCase):
         self.state = StateStore(state_path)
         notifier = TelegramNotifier("T", chat_id, session=self.api, sleep=lambda s: None)
         notifier.clock = self.clock
-        settings = Settings(min_quote_volume=1.0)
+        settings = legacy_settings(min_quote_volume=1.0)
         executor = Executor(self.ex, settings, self.state, notifier, make_infos(list(prices)), self.clock)
         self.bot = Bot(settings, DemoProvider(int(self.clock() * 1000)), "demo", None, notifier, self.state, executor, self.ex, None,
                        self.clock, sleep=lambda s: None)

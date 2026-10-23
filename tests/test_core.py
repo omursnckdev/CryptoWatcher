@@ -14,6 +14,7 @@ from crypto_watcher.binance import (BinanceError, MarketClient, TradingClient, f
                                     ROUND_HALF_UP)
 from crypto_watcher.cli import main
 from crypto_watcher.config import Secrets, Settings, load_secrets, load_settings
+from helpers import legacy_settings
 from crypto_watcher.data import (CachedProvider, DemoProvider, SymbolInfo, parse_exchange_info, parse_klines,
                                  select_universe)
 from crypto_watcher.engine import scan
@@ -119,7 +120,7 @@ class DataTests(unittest.TestCase):
 
 class StrategyTests(unittest.TestCase):
     def setUp(self):
-        self.s = Settings()
+        self.s = legacy_settings()
         rng = np.random.default_rng(7)
         noise = rng.normal(0, 0.004, 300)
         self.up = calculate(frame(100 * np.exp(np.cumsum(0.002 + noise))))
@@ -158,7 +159,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(hv["signal"], "NO_TRADE")
         drifted = evaluate("XUSDT", self.up, self.up, self.up, "BULL", 0.0, last * 1.5, None, self.s, 10_000)
         self.assertEqual(drifted["signal"], "NO_TRADE")
-        only_short = evaluate("XUSDT", self.up, self.up, self.up, "BULL", 0.0, last, None, Settings(allow_long=False), 10_000)
+        only_short = evaluate("XUSDT", self.up, self.up, self.up, "BULL", 0.0, last, None, legacy_settings(allow_long=False), 10_000)
         self.assertEqual(set(only_short["sides"]), {"SHORT"})
 
     def test_counter_regime_requires_higher_score(self):
@@ -175,7 +176,7 @@ class StrategyTests(unittest.TestCase):
     def test_regime(self):
         self.assertEqual(market_regime(self.up, self.up, self.s), "BULL")
         self.assertEqual(market_regime(self.down, self.down, self.s), "BEAR")
-        self.assertEqual(market_regime(self.up, self.up, Settings(btc_high_vol_atr_pct=0.0005)), "HIGH_VOLATILITY")
+        self.assertEqual(market_regime(self.up, self.up, legacy_settings(btc_high_vol_atr_pct=0.0005)), "HIGH_VOLATILITY")
 
     def test_base_asset(self):
         self.assertEqual(base_asset("1000PEPEUSDT"), "PEPE")
@@ -183,11 +184,77 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(base_asset("1INCHUSDT"), "1INCH")
 
 
+class StrategyFilterTests(unittest.TestCase):
+    """The two entry filters added after the 2023-26 backtest: trend strength and no trades against the BTC regime."""
+
+    def setUp(self):
+        rng = np.random.default_rng(7)
+        self.up = calculate(frame(100 * np.exp(np.cumsum(0.002 + rng.normal(0, 0.004, 300)))))
+        self.last = float(self.up.close.iloc[-1])
+        row = self.up.iloc[-1]
+        self.ext = float((row.close - row.ema20) / row.atr)          # LONG-side extension of the fixture
+
+    def run_eval(self, regime="BULL", **settings):
+        s = legacy_settings(**settings)
+        return evaluate("XUSDT", self.up, self.up, self.up, regime, 0.0, self.last, None, s, 10_000)
+
+    def blockers(self, result, side):
+        return result["sides"][side]["blockers"]
+
+    def test_new_defaults(self):
+        s = Settings()
+        self.assertEqual((s.atr_stop_multiplier, s.tp_r, s.min_trend_extension_atr, s.allow_counter_regime), (3.0, 3.0, 2.0, False))
+        self.assertLess(s.breakeven_r, s.tp_r)
+
+    def test_weak_trend_is_blocked_and_strong_trend_passes(self):
+        self.assertGreater(self.ext, 0)
+        weak = self.run_eval(min_trend_extension_atr=self.ext + 0.01)
+        self.assertTrue(any("Trend too weak" in b for b in self.blockers(weak, "LONG")))
+        self.assertEqual(weak["sides"]["LONG"]["score"], self.run_eval()["sides"]["LONG"]["score"])   # a filter, not a score change
+        strong = self.run_eval(min_trend_extension_atr=self.ext - 0.01)
+        self.assertFalse(any("Trend too weak" in b for b in self.blockers(strong, "LONG")))
+
+    def test_extension_is_measured_in_the_trade_direction(self):
+        result = self.run_eval(min_trend_extension_atr=0.5)
+        self.assertTrue(any("Trend too weak" in b for b in self.blockers(result, "SHORT")))     # price is above EMA20: bad for a short
+
+    def test_zero_switches_the_trend_filter_off(self):
+        result = self.run_eval(min_trend_extension_atr=0.0)
+        self.assertFalse(any("Trend too weak" in b for side in ("LONG", "SHORT") for b in self.blockers(result, side)))
+
+    def test_trades_against_the_btc_regime_are_blocked(self):
+        bear = self.run_eval("BEAR", allow_counter_regime=False)
+        self.assertTrue(any("against the BTC BEAR regime" in b for b in self.blockers(bear, "LONG")))
+        self.assertFalse(any("against" in b for b in self.blockers(bear, "SHORT")))           # with the regime: fine
+        bull = self.run_eval("BULL", allow_counter_regime=False)
+        self.assertFalse(any("against" in b for b in self.blockers(bull, "LONG")))
+        self.assertTrue(any("against the BTC BULL regime" in b for b in self.blockers(bull, "SHORT")))
+        neutral = self.run_eval("NEUTRAL", allow_counter_regime=False)
+        self.assertFalse(any("against" in b for side in ("LONG", "SHORT") for b in self.blockers(neutral, side)))
+
+    def test_counter_regime_can_be_allowed_again_with_the_old_penalty(self):
+        bear = self.run_eval("BEAR", allow_counter_regime=True)
+        self.assertFalse(any("against" in b for b in self.blockers(bear, "LONG")))
+        self.assertEqual(bear["sides"]["LONG"]["threshold"], self.run_eval("BULL")["sides"]["LONG"]["threshold"] + 10)
+
+    def test_default_geometry_is_three_atr_and_three_r(self):
+        plan = risk_plan("LONG", 100.0, 1.0, 10_000, Settings())
+        self.assertAlmostEqual(plan["stop"], 97.0)
+        self.assertAlmostEqual(plan["take_profit"], 109.0)
+        short = risk_plan("SHORT", 100.0, 1.0, 10_000, Settings())
+        self.assertAlmostEqual((short["stop"], short["take_profit"]), (103.0, 91.0))
+        self.assertAlmostEqual(plan["planned_risk"], 100.0)          # still 1% of 10,000 at the stop
+
+    def test_negative_extension_setting_is_rejected(self):
+        with self.assertRaises(ValueError):
+            Settings(min_trend_extension_atr=-1.0)
+
+
 class RiskPlanTests(unittest.TestCase):
     INFO = SymbolInfo("XUSDT", "X", 0.01, 0.001, 0.001, 1000.0, 5.0, 0)
 
     def test_long_and_short_geometry(self):
-        s = Settings(atr_stop_multiplier=1.5)
+        s = legacy_settings(atr_stop_multiplier=1.5)
         long = risk_plan("LONG", 100.0, 1.0, 10_000, s)
         short = risk_plan("SHORT", 100.0, 1.0, 10_000, s)
         self.assertEqual((long["stop"], long["take_profit"]), (98.5, 103.0))
@@ -195,20 +262,20 @@ class RiskPlanTests(unittest.TestCase):
         self.assertAlmostEqual(long["planned_risk"], 100.0)  # 1% of 10k
 
     def test_margin_cap_binds_for_tight_stops(self):
-        plan = risk_plan("LONG", 100.0, 0.4, 10_000, Settings())   # 0.8 stop -> risk budget alone would allow 125 units
+        plan = risk_plan("LONG", 100.0, 0.4, 10_000, legacy_settings())   # 0.8 stop -> risk budget alone would allow 125 units
         self.assertAlmostEqual(plan["margin"], 2000.0)       # 20% of capital
         self.assertAlmostEqual(plan["quantity"], 100.0)
         self.assertLess(plan["planned_risk"], 100.0)
 
     def test_rounding_and_minimums(self):
-        plan = risk_plan("LONG", 123.456, 1.234, 10_000, Settings(), self.INFO)
+        plan = risk_plan("LONG", 123.456, 1.234, 10_000, legacy_settings(), self.INFO)
         self.assertEqual(Decimal(str(plan["quantity"])) % Decimal("0.001"), 0)
         self.assertEqual(round(plan["stop"], 2), plan["stop"])
         with self.assertRaisesRegex(ValueError, "minimum order size"):
-            risk_plan("LONG", 100.0, 1.0, 5, Settings(), self.INFO)  # 3.3 USDT notional < 5 minimum
+            risk_plan("LONG", 100.0, 1.0, 5, legacy_settings(), self.INFO)  # 3.3 USDT notional < 5 minimum
 
     def test_rejections(self):
-        s = Settings()
+        s = legacy_settings()
         with self.assertRaisesRegex(ValueError, "too wide"):
             risk_plan("LONG", 100.0, 10.0, 10_000, s)       # 20% stop at 5x
         with self.assertRaisesRegex(ValueError, "fees"):
@@ -216,7 +283,7 @@ class RiskPlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             risk_plan("SHORT", 1.0, 0.0, 10_000, s)
         with self.assertRaisesRegex(ValueError, "non-positive"):
-            risk_plan("LONG", 1.0, 0.7, 10_000, Settings(leverage=1))  # stop below zero
+            risk_plan("LONG", 1.0, 0.7, 10_000, legacy_settings(leverage=1))  # stop below zero
 
 
 class NewsTests(unittest.TestCase):
@@ -612,8 +679,8 @@ class ScanAndCliTests(unittest.TestCase):
 
     def test_demo_scan_is_deterministic_and_json_safe(self):
         d = DemoProvider(1_791_284_400_000)
-        a = scan(d, Settings(), d.symbols(), 10_000.0, None, 1_791_284_400_000, "demo", True)
-        b = scan(d, Settings(), d.symbols(), 10_000.0, None, 1_791_284_400_000, "demo", True)
+        a = scan(d, legacy_settings(), d.symbols(), 10_000.0, None, 1_791_284_400_000, "demo", True)
+        b = scan(d, legacy_settings(), d.symbols(), 10_000.0, None, 1_791_284_400_000, "demo", True)
         self.assertEqual(json.dumps(a, allow_nan=False), json.dumps(b, allow_nan=False))
         self.assertEqual(a["errors"], [])
         self.assertEqual(len(a["signals"]), 8)
@@ -621,7 +688,7 @@ class ScanAndCliTests(unittest.TestCase):
 
     def test_one_bad_symbol_is_isolated(self):
         d = DemoProvider(1_791_284_400_000)
-        report = scan(d, Settings(), d.symbols() + ["NOPEUSDT"], 10_000.0, None, 1_791_284_400_000, "demo", True)
+        report = scan(d, legacy_settings(), d.symbols() + ["NOPEUSDT"], 10_000.0, None, 1_791_284_400_000, "demo", True)
         self.assertEqual([e["symbol"] for e in report["errors"]], ["NOPEUSDT"])
         self.assertEqual(len(report["signals"]), 8)
 

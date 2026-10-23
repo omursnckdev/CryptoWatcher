@@ -15,7 +15,9 @@ include_symbols = []           # her zaman taranacak ek semboller, örn. ["SUIUS
 # --- sinyal -----------------------------------------------------------
 entry_score = 70               # 0-100 normalize skor; bu ve üstü işlem adayı
 strong_score = 80
-counter_regime_penalty = 10    # BTC rejimine ters yönde eşik +10
+allow_counter_regime = false   # BTC rejimine ters işlem yok (2023-26 testinde işlem başı ~-0,12R)
+counter_regime_penalty = 10    # yalnızca allow_counter_regime = true iken: ters yönde eşik +10
+min_trend_extension_atr = 2.0  # fiyat işlem yönünde EMA20'den en az bu kadar ATR uzakta olmalı (0 = kapalı)
 allow_long = true
 allow_short = true
 
@@ -28,8 +30,8 @@ max_margin_fraction = 0.20     # tek pozisyona ayrılacak azami marj
 max_open_positions = 5
 max_same_direction = 3
 max_daily_loss_fraction = 0.05 # günlük gerçekleşen zarar bu orana ulaşırsa yeni işlem yok
-atr_stop_multiplier = 2.0
-tp_r = 2.0
+atr_stop_multiplier = 3.0      # geniş stop: komisyon+kayma R başına daha ucuz
+tp_r = 3.0
 breakeven_r = 1.0              # +1R'de stop girişe çekilir (0 = kapalı)
 max_hold_hours = 48
 cooldown_minutes = 120

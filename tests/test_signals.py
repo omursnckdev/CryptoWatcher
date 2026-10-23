@@ -7,7 +7,7 @@ from crypto_watcher.config import Settings
 from crypto_watcher.executor import Executor
 from crypto_watcher.journal import Journal
 from test_executor import Base
-from helpers import Clock, make_infos
+from helpers import Clock, make_infos, legacy_settings
 
 HOUR, DAY = sg.HOUR_MS, 24 * sg.HOUR_MS
 BASE = dict(tp_r=2.0, breakeven_r=1.0, hold_hours=48, fee=0.0005)
@@ -101,11 +101,11 @@ class SignalLogTests(unittest.TestCase):
         self.path = Path(self.dir.name) / "state" / "signals.jsonl"
         self.clock = Clock(1_791_000_000.0)
         self.market = FakeMarket(stopped_out)
-        self.log = sg.SignalLog(self.path, self.market, Settings(), self.clock)
+        self.log = sg.SignalLog(self.path, self.market, legacy_settings(), self.clock)
         self.seen_ms = int(self.clock() * 1000)
 
     def reopen(self):
-        return sg.SignalLog(self.path, self.market, Settings(), self.clock)
+        return sg.SignalLog(self.path, self.market, legacy_settings(), self.clock)
 
     def test_labels(self):
         self.assertEqual(sg.skip_label("max same-direction (SHORT) positions"), "yön limiti")
@@ -213,7 +213,7 @@ def rows(status, values, day0=1_790_000_000_000, per_day=1, **extra):
 
 class SummaryTests(unittest.TestCase):
     def make(self, groups, pending=0):
-        log = sg.SignalLog(Path(tempfile.mkdtemp()) / "s.jsonl", None, Settings())
+        log = sg.SignalLog(Path(tempfile.mkdtemp()) / "s.jsonl", None, legacy_settings())
         for r in sum(groups, []):
             log.signals[r["id"]] = {k: v for k, v in r.items() if k != "net_r"}
             log.results[r["id"]] = {"id": r["id"], "net_r": r["net_r"], "exit": "SL"}
@@ -280,7 +280,7 @@ class SummaryTests(unittest.TestCase):
 
 class BotIntegrationTests(Base):
     def build(self, **settings):
-        self.settings = Settings(min_quote_volume=1.0, **settings)
+        self.settings = legacy_settings(min_quote_volume=1.0, **settings)
         self.executor = Executor(self.ex, self.settings, self.state, self.notifier, make_infos(self.symbols), self.clock)
         self.executor.roll_day(15_000.0)
         self.dir = tempfile.TemporaryDirectory()

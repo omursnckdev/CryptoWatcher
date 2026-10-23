@@ -64,11 +64,12 @@ Eksik veri **nötr puan almaz**: haber bulunamazsa (ya da BTC için "BTC'ye gör
 normalize edilir ve rapor bunu `unavailable` olarak gösterir. Haber ayrıca bir **veto** işlevi görür: pozisyon yönünün aleyhine
 güçlü duygu (`news_veto`) işlemi engeller (hack, delist, dava, çöküş…; kaldıraçlı işlemde en tehlikeli haber türleri).
 
-**Giriş koşulu:** skor ≥ `entry_score` (70; BTC rejimine ters yönde +10) ve hiçbir *blocker* yok: BTC aşırı oynak, aşırı
-funding, ATR bandı dışı, sinyal mumundan beri fiyat > 1 ATR kaymış, aleyhte haber, risk planı kurulamıyor.
+**Giriş koşulu:** skor ≥ `entry_score` (70) ve hiçbir *blocker* yok: **trend zayıf** (fiyat işlem yönünde EMA20'den 2 ATR'den
+az uzakta, `min_trend_extension_atr`), **BTC rejimine ters yön** (`allow_counter_regime = false`), BTC aşırı oynak, aşırı funding,
+ATR bandı dışı, sinyal mumundan beri fiyat > 1 ATR kaymış, aleyhte haber, risk planı kurulamıyor.
 
 **Risk yönetimi:**
-- Stop = 2×ATR, hedef = 2R. Miktar = `min(risk bütçesi, marj bütçesi)`: işlem başına sermayenin %1'i risk, pozisyon başına
+- Stop = 3×ATR, hedef = 3R (Ekim 2026'ya kadar 2×ATR / 2R idi; neden değiştiği aşağıda). Miktar = `min(risk bütçesi, marj bütçesi)`: işlem başına sermayenin %1'i risk, pozisyon başına
   en çok %20 marj. Stop, tasfiye fiyatından önce gelmeyecek kadar genişse (`stop > 0.6 × giriş/kaldıraç`) işlem açılmaz.
 - Varsayılan 5x, **ISOLATED** marj, one-way mod. En çok 5 açık pozisyon (aynı yönde 3), günlük gerçekleşen zarar %5'i
   geçerse yeni işlem yok, kapanan sembol için 2 saat bekleme.
@@ -224,6 +225,25 @@ Bot her işlemin **girişte ne gördüğünü** (skor, BTC rejimi, RSI/ADX/hacim
 - Özellik açıldığından önce kapanan işlemler günlükte yoktur (o zaman bu veriler tutulmuyordu). Emir göndermez, hata verirse işlem akışını etkilemez.
   `journal_enabled = false` ile kapatılır. Dosya: `sudo docker compose exec cryptowatcher cat /app/state/journal.jsonl`.
 
+## Ekim 2026 strateji değişikliği: ne değişti, neden, ne beklenmeli
+
+Canlı testnet (8-22 Ekim, 71 işlem) ve 2023-03..2026-09 arası **32.352 geçmiş sinyalin** yeniden oynatılmasıyla:
+
+| Bulgu | Sonuç |
+|---|---|
+| Eski yapı (2×ATR / 2R, filtre yok) | komisyon öncesi +0,04R, maliyet 0,07R → **net −0,03R/işlem** |
+| Stop genişliği | dar stop pahalı: 1,5×ATR −0,059R, 3×ATR/3R +0,004R (eski yapıya göre eşli fark +0,035R, t≈3,0) |
+| Trend gücü | fiyat EMA20'den ne kadar uzaksa sonuç o kadar iyi (en zayıf beşte bir −0,064R, en güçlü +0,025R); "geç giriş" sorunu yok |
+| BTC rejimine ters işlemler | −0,12R/işlem (t≈−2,2) |
+| **Yeni yapı** (3×ATR/3R + trend ≥2 ATR + rejime ters yok) | **+0,078R/işlem** (t≈1,9), 2023-24'te +0,047R, 2025-26'da +0,107R; sinyallerin ~%25'i kalır |
+| Haftalık momentum (coin sıralama, uzun-kısa) | eğitimde zayıf, **test döneminde tutmadı** (+0,10%/hafta, t 0,2) → eklenmedi |
+| BTC ile korunma (piyasa-nötr) | kazancı siliyor (+0,076R → −0,014R; ek bacak maliyeti) → eklenmedi |
+
+**Dürüst uyarılar:** trend eşiği (2 ATR) aynı veriye bakılarak seçildi, yani gerçek etki daha küçük olabilir; t≈1,9 "umut verici"
+demektir, "kanıtlandı" değil. 3R hedef + 1R stop ile **kazanma oranı düşük olur (~%25-30)**; art arda 8-10 zarar normaldir.
+Pozisyonlar daha uzun tutulur (medyan ~1 gün), işlem sayısı azalır. Eski davranışa dönmek için `settings.toml`'da
+`atr_stop_multiplier = 2.0`, `tp_r = 2.0`, `min_trend_extension_atr = 0`, `allow_counter_regime = true`.
+
 ## Stop bekçisi (çalışırken koruma)
 
 "Her pozisyonun borsada stopu olsun" kuralı yalnızca açılışta ve başlangıçta değil, **çalışırken de** denetlenir (`stop_guard_enabled`, `guard_interval_seconds = 60`).
@@ -264,7 +284,7 @@ Belirli bir coini incelemek için: `sudo docker compose exec -T cryptowatcher py
 
 "Aynı yönde en fazla 3 pozisyon" gibi limitler riski sınırlar ama iyi bir fırsatı da kaçırtabilir. Bunu tahminle değil veriyle görmek için bot
 **her sinyali** (açılan da, limit yüzünden açılmayan da) `state/signals.jsonl` dosyasına yazar ve emir göndermeden, mainnet 5 dakikalık mumlarla
-botun kendi kurallarıyla yeniden oynatır: ATR stopu, 2R hedef, +1R'de başa baş, 48 saat zaman stopu, komisyon + kayma.
+botun kendi kurallarıyla yeniden oynatır: ATR stopu, hedef (`tp_r`), +1R'de başa baş, 48 saat zaman stopu, komisyon + kayma.
 
 - Gruplar: *açıldı*, *yön limiti*, *toplam pozisyon limiti*, *bekleme süresi*, *günlük zarar kilidi*, *duraklatıldı*, *emir/bütçe nedeniyle açılmadı*.
   Aynı mumdaki tekrar taramalar tek sinyal sayılır; "zaten bu coinde pozisyon var" bir alternatif işlem olmadığı için kaydedilmez.

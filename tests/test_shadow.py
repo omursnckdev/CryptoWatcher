@@ -12,7 +12,7 @@ from crypto_watcher.config import Settings
 from crypto_watcher.data import DemoProvider
 from crypto_watcher.shadow import DAY_MS, HOUR_MS, ShadowRecorder
 from crypto_watcher.state import StateStore
-from helpers import Clock, FakeExchange
+from helpers import Clock, FakeExchange, legacy_settings
 from test_executor import Notifier
 
 T = int(pd.Timestamp("2026-10-08 12:00", tz="UTC").timestamp() * 1000)       # the hour being evaluated
@@ -280,7 +280,7 @@ class BotIntegrationTests(Base):
     def make_bot(self, shadow):
         prices = {s: v["last"] for s, v in DemoProvider(int(self.clock() * 1000)).tickers().items()}
         notifier = Notifier()
-        settings = Settings(min_quote_volume=1.0, scan_interval_seconds=300)
+        settings = legacy_settings(min_quote_volume=1.0, scan_interval_seconds=300)
         bot = Bot(settings, DemoProvider(int(self.clock() * 1000)), "demo", None, notifier, StateStore(None), None,
                   FakeExchange(prices, self.clock), None, self.clock, sleep=lambda s: None, shadow=shadow)
         bot.start()

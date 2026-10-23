@@ -150,6 +150,12 @@ def evaluate(symbol: str, f1: pd.DataFrame, f4: pd.DataFrame, btc: pd.DataFrame 
             blockers.append(f"Extreme funding {funding * 100:+.3f}% against {side}")
         if not settings.min_atr_pct <= atr_pct <= settings.max_atr_pct:
             blockers.append(f"ATR {atr_pct * 100:.2f}% of price outside [{settings.min_atr_pct * 100:.2f}%, {settings.max_atr_pct * 100:.2f}%]")
+        extension = d * (float(row.close) - float(row.ema20)) / float(row.atr)
+        if settings.min_trend_extension_atr and extension < settings.min_trend_extension_atr:
+            blockers.append(f"Trend too weak: {extension:.1f} ATR from EMA20 (< {settings.min_trend_extension_atr:g})")
+        counter = (side == "LONG" and regime == "BEAR") or (side == "SHORT" and regime == "BULL")
+        if counter and not settings.allow_counter_regime:
+            blockers.append(f"{side} against the BTC {regime} regime")
         if drift > settings.max_drift_atr:
             blockers.append(f"Price moved {drift:.2f} ATR since the signal candle closed")
         if news is not None and news.available and d * news.sentiment <= -settings.news_veto:
@@ -161,7 +167,6 @@ def evaluate(symbol: str, f1: pd.DataFrame, f4: pd.DataFrame, btc: pd.DataFrame 
         except ValueError as error:
             result["risk_plan"] = None
             blockers.append(str(error))
-        counter = (side == "LONG" and regime == "BEAR") or (side == "SHORT" and regime == "BULL")
         result["threshold"] = settings.entry_score + (settings.counter_regime_penalty if counter else 0)
         result["blockers"] = blockers
         sides[side] = result

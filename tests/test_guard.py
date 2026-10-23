@@ -2,7 +2,7 @@ import unittest
 from crypto_watcher.binance import BinanceError
 from crypto_watcher.config import Settings
 from crypto_watcher.executor import Executor, RESTORE_ATTEMPTS
-from helpers import make_infos
+from helpers import make_infos, legacy_settings
 from test_executor import Base
 
 
@@ -249,7 +249,7 @@ class GuardScheduleTests(GuardBase):
         self.assertEqual(len(self.ex.kinds("open_algo_orders")), 2)
 
     def test_can_be_switched_off(self):
-        settings = Settings(min_quote_volume=1.0, stop_guard_enabled=False)
+        settings = legacy_settings(min_quote_volume=1.0, stop_guard_enabled=False)
         self.executor = Executor(self.ex, settings, self.state, self.notifier, make_infos(self.symbols), self.clock)
         self.executor.roll_day(15_000.0)
         trade = self.open("DOGEUSDT")

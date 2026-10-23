@@ -7,7 +7,7 @@ from crypto_watcher.engine import actionable, scan
 from crypto_watcher.executor import Executor
 from crypto_watcher.state import StateStore
 from crypto_watcher.telegram import TelegramNotifier
-from helpers import Clock, FakeExchange, make_infos
+from helpers import Clock, FakeExchange, make_infos, legacy_settings
 
 
 class Notifier(TelegramNotifier):
@@ -21,7 +21,7 @@ class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):  # scanning is the slow part; the candidates are read-only
         clock = Clock()
-        cls.settings = Settings(min_quote_volume=1.0)
+        cls.settings = legacy_settings(min_quote_volume=1.0)
         cls.demo = DemoProvider(int(clock() * 1000))
         cls.symbols = cls.demo.symbols()
         cls.base_prices = {s: v["last"] for s, v in cls.demo.tickers().items()}
@@ -137,7 +137,7 @@ class GuardTests(Base):
         self.assertEqual(self.executor.can_open(c), "already in a position")
 
     def test_position_and_direction_limits(self):
-        s = Settings(max_open_positions=2, max_same_direction=1, min_quote_volume=1.0)
+        s = legacy_settings(max_open_positions=2, max_same_direction=1, min_quote_volume=1.0)
         ex = Executor(self.ex, s, self.state, self.notifier, make_infos(self.symbols), self.clock)
         self.state["trades"]["BTCUSDT"] = {"side": "LONG"}
         self.assertIn("same-direction", ex.can_open(self.cands["DOGEUSDT"]))
@@ -435,7 +435,7 @@ class BotTests(Base):
         self.assertEqual(len(self.notifier.sent), opened)
 
     def test_breakeven_message_can_be_disabled(self):
-        quiet = Settings(min_quote_volume=1.0, notify_breakeven=False)
+        quiet = legacy_settings(min_quote_volume=1.0, notify_breakeven=False)
         executor = Executor(self.ex, quiet, self.state, self.notifier, make_infos(self.symbols), self.clock)
         executor.roll_day(15_000.0)
         trade = executor.open_trade(self.cands["DOGEUSDT"])
