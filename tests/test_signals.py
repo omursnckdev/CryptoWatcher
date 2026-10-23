@@ -341,6 +341,16 @@ class BotIntegrationTests(Base):
         bot.tick()
         self.assertTrue(self.market.calls)
 
+    def test_signals_carry_a_shadow_mtf_rating_and_trading_is_unchanged(self):
+        bot = self.build(max_same_direction=1)
+        bot.tick()
+        self.assertEqual(len(self.state["trades"]), 2)                    # same trades as without the rating
+        for rec in self.signals.signals.values():
+            self.assertIn("mtf", rec)
+            self.assertTrue("dir" in rec["mtf"] or "error" in rec["mtf"], rec["mtf"])
+            if "dir" in rec["mtf"]:
+                self.assertIn(rec["mtf"]["dir"], (-1, 0, 1))
+
     def test_command_without_signal_log(self):
         bot = Bot(self.settings, self.demo, "demo", None, self.notifier, self.state, None, self.ex, None, self.clock, sleep=lambda s: None)
         self.assertIn("kapalı", bot._answer("/atlanan"))

@@ -9,6 +9,7 @@ from .config import Settings
 from .data import CachedProvider, choose_market_source, parse_exchange_info, select_universe
 from .engine import actionable, scan
 from .news import NewsService
+from . import mtf
 from .signals import NOT_OPENED, TAKEN, SignalLog, skip_label
 from .state import StateStore
 from . import telegram as tg
@@ -182,7 +183,7 @@ class Bot:
         if not self.signals or not status:
             return
         try:
-            self.signals.note(candidate, status, trade)
+            self.signals.note(candidate, status, trade, confirm=lambda: mtf.fetch_confirmation(self.provider, candidate["symbol"]))
         except Exception as error:
             log.warning("Signal log failed: %s", error)
 

@@ -244,6 +244,22 @@ demektir, "kanıtlandı" değil. 3R hedef + 1R stop ile **kazanma oranı düşü
 Pozisyonlar daha uzun tutulur (medyan ~1 gün), işlem sayısı azalır. Eski davranışa dönmek için `settings.toml`'da
 `atr_stop_multiplier = 2.0`, `tp_r = 2.0`, `min_trend_extension_atr = 0`, `allow_counter_regime = true`.
 
+## Öncü sinyal araştırması ve MTF onayı (gölge test)
+
+Ekim 2026'da bir "öncü sinyal" önerisinin üç modülü (sessiz birikim, OI/long-short/funding kuralları, çoklu zaman dilimi momentumu +
+BTC lead-lag) 24 coinin 5 dakikalık verisinde (2023-01..2026-09) **aynen** sınandı (eğitim 2023-24, test 2025-26, 14 bp maliyet):
+
+- **Hiçbir kural tek başına** maliyet sonrası kazandırmadı (4 saatte -2..-23 bp/işlem). Önerinin kendi ölçütü (60 dk'da ±%1 yön isabeti)
+  bazı kurallarda taban oranın 3-5 puan üstünde görünse de bu birkaç trend gününden geliyordu; gün bazında kayboluyor.
+- Lead-lag 5 dakikalık ölçekte neredeyse hiç geçerli olmuyor (BTC ile altcoinler aynı mumda hareket ediyor); kalabalık-short kuralı hiç tetiklenmiyor.
+- **Tek umut verici bulgu:** botun mevcut sinyallerinde 5 dk / 1 sa / 4 sa momentumu aynı yönde olanlar daha iyi (2023-24: +0,04R fark,
+  anlamlı değil; 2025-26: +0,23R, %95 aralık +0,09..+0,35).
+
+Bu yüzden yalnızca **MTF onayı**, işlem kararlarını etkilemeden her sinyal için hesaplanıp kaydedilir (`src/crypto_watcher/mtf.py`,
+araştırmadaki hesapla 600/600 anda aynı karar). `/atlanan` özetinde "onaylı / onaysız" karşılaştırması görünür. **Önceden yazılmış karar kuralı:**
+90 gün sonra onaylı sinyaller onaysızlardan gün-kümeli t ≥ 1,65 ile iyiyse **ve** dönemin iki yarısında da fark pozitifse MTF onayı bir
+**filtre** olarak önerilir; değilse eklenmez. Sinyal başına bir 5 dakikalık mum isteği yapılır; hata olursa sinyal yine kaydedilir.
+
 ## Maliyet azaltma (maker emirler, BNB)
 
 Yeni yapıda 1R ≈ fiyatın %4,2'si; maliyet işlem başına ~0,043R (komisyon %0,05 + kayma ~%0,02, giriş ve çıkışta). Çıkışların dağılımı

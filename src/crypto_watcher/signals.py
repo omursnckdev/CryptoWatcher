@@ -13,6 +13,7 @@ import logging
 import math
 import time
 from pathlib import Path
+from . import mtf
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ SLIPPAGE = 0.0002              # per side, in addition to the taker fee
 RETRY_MS = 30 * 60_000         # re-check an unresolved signal at most this often
 EXPIRE_MS = 24 * HOUR_MS       # give up this long after the holding period should have ended
 MIN_SKIPPED, MIN_DAYS = 30, 10     # below this the summary shows numbers but draws no conclusion
+MTF_DECISION = {"min_days": 90, "min_t": 1.65}   # pre-registered rule for the shadow MTF confirmation (see mtf.py)
 
 # executor.can_open reason -> short Turkish label; reasons not listed are not alternative trades and are not recorded
 SKIP_LABELS = {"max same-direction": "yön limiti", "max open positions": "toplam pozisyon limiti", "cooldown": "bekleme süresi",
@@ -129,8 +131,9 @@ class SignalLog:
             log.error("Could not write %s: %s", self.path, error)
 
     # ---- recording ----------------------------------------------------------------------------------------
-    def note(self, candidate: dict, status: str, trade: dict | None = None):
-        """`status`: TAKEN or a SKIP_LABELS label / NOT_OPENED. Repeated scans of the same candle are one signal."""
+    def note(self, candidate: dict, status: str, trade: dict | None = None, confirm=None):
+        """`status`: TAKEN or a SKIP_LABELS label / NOT_OPENED. Repeated scans of the same candle are one signal.
+        `confirm`: optional zero-argument callable returning the shadow MTF confirmation; called only for a new signal."""
         side = candidate["side"]
         plan = candidate["sides"][side].get("risk_plan")
         if not plan:
@@ -148,6 +151,11 @@ class SignalLog:
         record = {"k": "sig", "id": key, "symbol": candidate["symbol"], "side": side, "date": candidate["date"], "seen_ms": now_ms,
                   "distance_frac": plan["risk_distance"] / plan["entry"], "score": round(float(candidate["score"]), 1),
                   "regime": candidate.get("market_regime"), "status": status, "trade_id": trade_id}
+        if confirm is not None:
+            try:
+                record["mtf"] = confirm()
+            except Exception as error:          # a research field must never cost us the signal record
+                record["mtf"] = {"error": f"{type(error).__name__}: {error}"[:200]}
         self.signals[key] = record
         self._append(record)
 
@@ -205,7 +213,39 @@ class SignalLog:
         if check:
             lines += ["", check]
         lines += ["", self._conclusion(groups)]
+        mtf_lines = self._mtf_section(rows)
+        if mtf_lines:
+            lines += [""] + mtf_lines
         return "\n".join(lines)
+
+    def _mtf_section(self, rows: list[dict]) -> list[str]:
+        """Shadow MTF confirmation: confirmed (MTF direction == signal side) vs not, on every replayed signal."""
+        rated = [r for r in rows if isinstance(r.get("mtf"), dict) and "dir" in r["mtf"]]
+        if not rated:
+            return []
+        sign = lambda r: 1 if r["side"] == "LONG" else -1
+        agree = [r["mtf"]["dir"] == sign(r) for r in rated]
+        lines = ["🧭 <b>MTF onayı (gölge, işlemleri etkilemez)</b>"]
+        for label, flag in (("onaylı", True), ("onaysız", False)):
+            part = [r["net_r"] for r, a in zip(rated, agree) if a == flag]
+            if part:
+                lines.append(f"• {label}: {len(part)} sinyal · ortalama {sum(part) / len(part):+.2f}R")
+        diff, t = mtf.cluster_diff([r["net_r"] for r in rated], agree, [_day(r["seen_ms"]) for r in rated])
+        first = min(r["seen_ms"] for r in rated)
+        days = (max(r["seen_ms"] for r in rated) - first) / (24 * HOUR_MS)
+        if diff == diff:
+            lines.append(f"fark {diff:+.2f}R (gün-kümeli t {t:+.1f})")
+        if days < MTF_DECISION["min_days"]:
+            lines.append(f"Karar: henüz erken ({days:.0f}/{MTF_DECISION['min_days']} gün). Kural: fark t ≥ {MTF_DECISION['min_t']} ve iki yarıda da pozitif.")
+            return lines
+        mid = first + (max(r["seen_ms"] for r in rated) - first) / 2
+        halves = []
+        for part in ([r for r in rated if r["seen_ms"] < mid], [r for r in rated if r["seen_ms"] >= mid]):
+            a = [r["mtf"]["dir"] == sign(r) for r in part]
+            halves.append(mtf.cluster_diff([r["net_r"] for r in part], a, [_day(r["seen_ms"]) for r in part])[0])
+        passed = t >= MTF_DECISION["min_t"] and all(h == h and h > 0 for h in halves)
+        lines.append("Karar: GEÇTİ, MTF onayı filtre olarak önerilir" if passed else "Karar: GEÇMEDİ, MTF onayı eklenmemeli")
+        return lines
 
     @staticmethod
     def _line(name: str, rows: list[dict]) -> str:
