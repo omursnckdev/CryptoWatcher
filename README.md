@@ -244,6 +244,22 @@ demektir, "kanıtlandı" değil. 3R hedef + 1R stop ile **kazanma oranı düşü
 Pozisyonlar daha uzun tutulur (medyan ~1 gün), işlem sayısı azalır. Eski davranışa dönmek için `settings.toml`'da
 `atr_stop_multiplier = 2.0`, `tp_r = 2.0`, `min_trend_extension_atr = 0`, `allow_counter_regime = true`.
 
+## Maliyet azaltma (maker emirler, BNB)
+
+Yeni yapıda 1R ≈ fiyatın %4,2'si; maliyet işlem başına ~0,043R (komisyon %0,05 + kayma ~%0,02, giriş ve çıkışta). Çıkışların dağılımı
+(geçmiş veri): stop %39 · zaman stopu %31 · başa baş %19 · hedef %11.
+
+| Ayar | Ne yapar | Güvenlik |
+|---|---|---|
+| `maker_entry` | En iyi alış/satış fiyatına **post-only** limit emir, `maker_wait_seconds` (20 sn) bekler; dolmayan kısım **piyasa emriyle** tamamlanır | Kalan miktar borsadaki gerçek pozisyondan hesaplanır: çift giriş olmaz; emir iptal edilemezse üstüne piyasa emri gönderilmez. Bekleme sırasında (≤20 sn) dolan kısım henüz stopsuzdur |
+| `maker_take_profit` | Hedef, hedefe 0,1R kala tetiklenen ve **tam hedefte** bekleyen limit emir (maker dolum) | Borsa kabul etmezse klasik piyasa hedefi konur; bekçi ve yeniden başlatma bekleyen limit hedefi tanır, üstüne ikinci hedef koymaz |
+| `maker_time_stop` | 48 saat dolunca önce post-only kapatma, dolmazsa normal kapatma merdiveni | Acil kapatmalar (stop, stopu geçen fiyat, bekçi) **hiç beklemez** |
+| `bnb_fee_discount` | Açılışta "komisyonu BNB ile öde" ayarını açar | Başarısızsa sadece uyarı (testnet'te desteklenmeyebilir) |
+
+Geçmiş veriye göre tahmini etki: maliyet 0,043R → ~0,024R (net +0,078R → ~+0,097R). Bu üst sınırdır: maker girişin gerçek dolum
+oranı ve kaçırılan fiyat ancak canlıda ölçülür; testnet emir defteri yapay olduğu için testnet sonuçları bunu yansıtmaz. **Stoplar her zaman
+piyasa emridir.** Kapatmak için ilgili ayarı `false` yapın.
+
 ## Stop bekçisi (çalışırken koruma)
 
 "Her pozisyonun borsada stopu olsun" kuralı yalnızca açılışta ve başlangıçta değil, **çalışırken de** denetlenir (`stop_guard_enabled`, `guard_interval_seconds = 60`).

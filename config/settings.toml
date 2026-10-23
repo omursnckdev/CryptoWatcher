@@ -36,6 +36,14 @@ breakeven_r = 1.0              # +1R'de stop girişe çekilir (0 = kapalı)
 max_hold_hours = 48
 cooldown_minutes = 120
 
+# --- maliyet -----------------------------------------------------------
+bnb_fee_discount = true        # komisyonu BNB ile öde (indirim; vadeli cüzdanda BNB gerekir, testnet'te etkisiz olabilir)
+maker_entry = true             # önce en iyi fiyattan post-only limit; dolmayan kısım piyasa emriyle (işlem kaçmaz)
+maker_take_profit = true       # hedef, hedefin hemen önünde tetiklenen limit emir (maker); reddedilirse piyasa hedefi
+maker_time_stop = true         # zaman stopu önce post-only limitle kapatmayı dener, olmazsa piyasa
+maker_wait_seconds = 20        # post-only emrin dolmasını bekleme süresi
+maker_tp_trigger_r = 0.1       # hedef limit emri, fiyat hedefe bu kadar R kala konur
+
 # --- döngü ------------------------------------------------------------
 scan_interval_seconds = 300
 manage_interval_seconds = 20

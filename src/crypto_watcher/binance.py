@@ -121,6 +121,10 @@ class MarketClient:
     def funding_rates(self, symbol: str, start_ms: int, end_ms: int) -> list:
         return self._request("GET", "/fapi/v1/fundingRate", {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000})
 
+    def book_ticker(self, symbol: str) -> dict:
+        """Best bid / ask right now: {bidPrice, bidQty, askPrice, askQty, ...}."""
+        return self._request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol})
+
     def premium_index(self, symbol: str | None = None):
         return self._request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol} if symbol else None)
 
@@ -191,6 +195,10 @@ class TradingClient(MarketClient):
             if error.code != -4046:  # "No need to change margin type"
                 raise
 
+    def set_fee_burn(self, on: bool = True):
+        """Pay futures fees with BNB (a discount on every symbol). Needs BNB in the futures wallet to have an effect."""
+        return self._signed("POST", "/fapi/v1/feeBurn", {"feeBurn": "true" if on else "false"})
+
     def set_leverage(self, symbol: str, leverage: int) -> dict:
         return self._signed("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage})
 
@@ -214,18 +222,46 @@ class TradingClient(MarketClient):
             "reduceOnly": "true" if reduce_only else None, "newClientOrderId": client_id,
             "newOrderRespType": "RESULT"})
 
+    def limit_order(self, symbol: str, side: str, quantity: float, price: float, client_id: str,
+                    post_only: bool = True, reduce_only: bool = False) -> dict:
+        """LIMIT order; post-only (GTX) is refused by the exchange (-5022 / status EXPIRED) instead of taking liquidity."""
+        return self._signed("POST", "/fapi/v1/order", {
+            "symbol": symbol, "side": side, "type": "LIMIT", "timeInForce": "GTX" if post_only else "GTC",
+            "quantity": fmt_decimal(quantity), "price": fmt_decimal(price), "reduceOnly": "true" if reduce_only else None,
+            "newClientOrderId": client_id, "newOrderRespType": "RESULT"})
+
+    def get_order(self, symbol: str, client_id: str) -> dict:
+        return self._signed("GET", "/fapi/v1/order", {"symbol": symbol, "origClientOrderId": client_id})
+
+    def cancel_order(self, symbol: str, client_id: str):
+        try:
+            return self._signed("DELETE", "/fapi/v1/order", {"symbol": symbol, "origClientOrderId": client_id})
+        except BinanceError as error:
+            if error.code not in (-2011, -2013):  # already filled / cancelled / unknown
+                raise
+
+    def open_orders(self, symbol: str | None = None) -> list[dict]:
+        return self._signed("GET", "/fapi/v1/openOrders", {"symbol": symbol})
+
     def algo_order(self, symbol: str, side: str, order_type: str, trigger_price: float, client_id: str,
-                   quantity: float | None = None) -> dict:
+                   quantity: float | None = None, price: float | None = None) -> dict:
         """STOP_MARKET / TAKE_PROFIT_MARKET conditional order.
 
         Without `quantity` it closes the whole position (closePosition). With `quantity` it is a reduce-only
         order, which may coexist with a closePosition order in the same direction (Binance allows only one of those).
         Binance moved conditional orders off /fapi/v1/order (error -4120) to the Algo Order API.
+        With `price` (types STOP / TAKE_PROFIT) the trigger places a resting LIMIT order at that price, so the fill can be a
+        maker fill; limit types need a quantity.
         """
-        return self._signed("POST", "/fapi/v1/algoOrder", {
-            "algoType": "CONDITIONAL", "symbol": symbol, "side": side, "type": order_type,
-            "triggerPrice": fmt_decimal(trigger_price), "workingType": "MARK_PRICE", "clientAlgoId": client_id,
-            **({"closePosition": "true"} if quantity is None else {"quantity": fmt_decimal(quantity), "reduceOnly": "true"})})
+        params = {"algoType": "CONDITIONAL", "symbol": symbol, "side": side, "type": order_type,
+                  "triggerPrice": fmt_decimal(trigger_price), "workingType": "MARK_PRICE", "clientAlgoId": client_id}
+        if quantity is None:
+            params["closePosition"] = "true"
+        else:
+            params.update(quantity=fmt_decimal(quantity), reduceOnly="true")
+        if price is not None:
+            params.update(price=fmt_decimal(price), timeInForce="GTC")
+        return self._signed("POST", "/fapi/v1/algoOrder", params)
 
     def get_algo_order(self, client_id: str) -> dict:
         return self._signed("GET", "/fapi/v1/algoOrder", {"clientAlgoId": client_id})

@@ -31,10 +31,12 @@ def _today(clock) -> str:
 
 
 class Executor:
-    def __init__(self, client, settings: Settings, state, notifier, infos: dict[str, SymbolInfo], clock=time.time, journal=None):
+    def __init__(self, client, settings: Settings, state, notifier, infos: dict[str, SymbolInfo], clock=time.time, journal=None, sleep=time.sleep):
         self.client, self.s, self.state, self.notify = client, settings, state, notifier
         self.infos, self._clock, self.journal = infos, clock, journal
         self._guard_at = 0.0
+        self._sleep = sleep
+        self._resting_exits: set | None = None   # symbols with a resting reduce-only limit order (a triggered maker target)
 
     # ---- account / limits -------------------------------------------------
     def prepare(self):
@@ -43,6 +45,11 @@ class Executor:
             self.client.set_one_way_mode()
             if self.client.position_mode():
                 raise RuntimeError("Account is in hedge mode and could not be switched to one-way mode")
+        if self.s.bnb_fee_discount:
+            try:
+                self.client.set_fee_burn(True)
+            except BinanceError as error:   # testnet / no BNB: fees are simply paid in USDT
+                log.warning("BNB fee discount could not be switched on: %s", error)
 
     def balance(self) -> dict:
         return self.client.usdt_balance()
@@ -132,10 +139,7 @@ class Executor:
             self._alert(f"open:{symbol}", f"{symbol} {side} açılamadı: {error}")
             return None
         opened_ms = int(self._clock() * 1000)
-        try:
-            self.client.market_order(symbol, order_side, plan["quantity"], client_id=client_id("e", symbol, opened_ms))
-        except BinanceError as error:
-            log.error("Entry order error for %s: %s (checking exchange position)", symbol, error)
+        self._enter(symbol, order_side, plan["quantity"], info, opened_ms)
         positions = self.client.positions(symbol)
         if not positions:
             self._alert(f"open:{symbol}", f"{symbol} {side} giriş emri gerçekleşmedi.")
@@ -165,15 +169,95 @@ class Executor:
         self.state["trades"][symbol] = trade
         self.state["signaled"][symbol] = candidate["date"]
         self.state.save()
-        try:
-            self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", take, trade["tp_id"])
-        except BinanceError as error:
+        if not self._place_target(trade):
             trade["tp_id"] = None
-            self.state.save()
-            log.warning("Take-profit not placed for %s: %s", symbol, error)
+        self.state.save()
         message = tg.fmt_open(trade, candidate, self.s.telegram_verbose)
         self.notify.send(message + ("\n⚠️ TP konulamadı, yalnızca stop aktif" if trade["tp_id"] is None else ""))
         return trade
+
+    def _enter(self, symbol: str, side: str, quantity: float, info, opened_ms: int):
+        """Maker first (post-only at the best price, waits maker_wait_seconds), then the unfilled rest at market, so a signal is
+        never missed. The rest is computed from the exchange's own position, never from order bookkeeping: a double entry is impossible."""
+        remaining = quantity
+        if self.s.maker_entry:
+            clean = self._maker_attempt(symbol, side, quantity, reduce_only=False)
+            try:
+                live = self.client.positions(symbol)
+            except BinanceError as error:
+                log.error("Position check after the maker entry of %s failed: %s; not adding a market order", symbol, error)
+                return
+            filled = abs(float(live[0]["positionAmt"])) if live else 0.0
+            if not clean:               # a maker order may still be resting: never stack a market order on top of it
+                log.error("Maker entry order of %s could not be cancelled; continuing with %s filled", symbol, filled)
+                return
+            remaining = round_step(quantity - filled, info.step)
+            if remaining < info.min_qty:
+                return
+        try:
+            self.client.market_order(symbol, side, remaining, client_id=client_id("e", symbol, opened_ms))
+        except BinanceError as error:
+            log.error("Entry order error for %s: %s (checking exchange position)", symbol, error)
+
+    def _maker_attempt(self, symbol: str, side: str, quantity: float, reduce_only: bool) -> bool:
+        """Post-only limit order at the best price on our side of the book, waiting up to maker_wait_seconds.
+
+        Returns False only when an order may still be live (it could not be cancelled); True when nothing of it remains."""
+        try:
+            book = self.client.book_ticker(symbol)
+            price = float(book["bidPrice"] if side == "BUY" else book["askPrice"])
+        except (BinanceError, KeyError, TypeError, ValueError) as error:
+            log.warning("No order book for %s (%s); skipping the maker attempt", symbol, error)
+            return True
+        cid = client_id("mk", symbol, int(self._clock() * 1000))
+        try:
+            order = self.client.limit_order(symbol, side, quantity, price, cid, post_only=True, reduce_only=reduce_only)
+        except BinanceError as error:              # -5022: would have taken liquidity; nothing was placed
+            log.info("Post-only %s %s %s not accepted (%s)", side, quantity, symbol, error)
+            return True
+        status = str(order.get("status", "")).upper()
+        deadline = self._clock() + self.s.maker_wait_seconds
+        while status not in ("FILLED", "EXPIRED", "CANCELED", "REJECTED") and self._clock() < deadline:
+            self._sleep(min(2.0, max(0.0, deadline - self._clock())))
+            try:
+                status = str(self.client.get_order(symbol, cid).get("status", "")).upper()
+            except BinanceError as error:
+                log.warning("Order status of %s %s unavailable: %s", symbol, cid, error)
+        if status in ("FILLED", "EXPIRED", "CANCELED", "REJECTED"):
+            return True
+        try:
+            self.client.cancel_order(symbol, cid)
+            return True
+        except BinanceError as error:
+            log.warning("Cancel of %s %s failed (%s); cancelling all open orders of the symbol", symbol, cid, error)
+        try:
+            self.client.cancel_all_orders(symbol)
+            return True
+        except BinanceError as error:
+            log.error("Could not cancel the maker order %s of %s: %s", cid, symbol, error)
+            return False
+
+    def _place_target(self, trade: dict) -> bool:
+        """Maker target: a TAKE_PROFIT limit order (triggered maker_tp_trigger_r before the target, resting AT the target, so it fills
+        as a maker); if the exchange refuses it, the classic market take-profit. Returns False when no target could be placed."""
+        symbol, take = trade["symbol"], trade["take_profit"]
+        exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
+        if self.s.maker_take_profit:
+            sign = 1 if trade["side"] == "LONG" else -1
+            trigger = round_step(take - sign * self.s.maker_tp_trigger_r * trade["risk_distance"], self.infos[symbol].tick, ROUND_HALF_UP)
+            try:
+                self.client.algo_order(symbol, exit_side, "TAKE_PROFIT", trigger, trade["tp_id"], quantity=trade["quantity"], price=take)
+                trade["tp_kind"] = "limit"
+                return True
+            except BinanceError as error:
+                log.warning("Limit take-profit refused for %s (%s); using a market take-profit", symbol, error)
+        try:
+            self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", take, trade["tp_id"])
+            trade["tp_kind"] = "market"
+            return True
+        except BinanceError as error:
+            log.warning("Take-profit not placed for %s: %s", symbol, error)
+            return False
 
     def _emergency_close(self, symbol: str, exit_side: str, quantity: float, reason: str):
         closed, fallback, error = self._close_now(symbol)
@@ -182,7 +266,7 @@ class Executor:
         else:
             self.notify.send(tg.fmt_warning(f"{symbol}: KORUMASIZ POZİSYON! {reason} Kapatma da başarısız: {error}. Elle müdahale edin."))
 
-    def _close_now(self, symbol: str) -> tuple[bool, bool, str | None]:
+    def _close_now(self, symbol: str, maker: bool = False) -> tuple[bool, bool, str | None]:
         """Close the whole position at market. -> (closed, used_plain_order, last_error).
 
         1. reduce-only market order (cannot flip the position);
@@ -193,6 +277,12 @@ class Executor:
             live = self.client.positions(symbol)
             if not live:
                 return True, False, None
+            if maker:                                  # not urgent (time stop): try to leave as a maker first
+                self._maker_attempt(symbol, "SELL" if float(live[0]["positionAmt"]) > 0 else "BUY",
+                                    abs(float(live[0]["positionAmt"])), reduce_only=True)
+                live = self.client.positions(symbol)
+                if not live:
+                    return True, False, None
             amount = float(live[0]["positionAmt"])
             side, quantity = ("SELL" if amount > 0 else "BUY"), abs(amount)
             try:
@@ -222,7 +312,7 @@ class Executor:
             self.notify.send(tg.fmt_warning(text))
             self.state.save()
 
-    def _force_close(self, trade: dict, hint: str, hint_first: bool = False) -> bool:
+    def _force_close(self, trade: dict, hint: str, hint_first: bool = False, maker: bool = False) -> bool:
         """Close the position now and finalize it. Retries are spaced 60 s apart; failures raise a (throttled) warning."""
         symbol, now_ms = trade["symbol"], int(self._clock() * 1000)
         if now_ms < trade.get("force_next_ms", 0):
@@ -230,7 +320,7 @@ class Executor:
         if hint_first:
             trade["close_hint"] = hint            # persisted: fills may only become visible on a later tick
             self.state.save()
-        closed, fallback, error = self._close_now(symbol)
+        closed, fallback, error = self._close_now(symbol, maker=maker)
         if not closed:
             trade["force_next_ms"] = now_ms + 60_000
             self.state.save()
@@ -273,7 +363,7 @@ class Executor:
         hours = self.s.max_hold_hours
         if not hours or self._clock() * 1000 - trade["opened_ms"] < hours * 3_600_000:
             return False
-        self._force_close(trade, "TIME_STOP", hint_first=True)
+        self._force_close(trade, "TIME_STOP", hint_first=True, maker=self.s.maker_time_stop)
         return True
 
     # ---- stop guard -------------------------------------------------------------
@@ -282,6 +372,12 @@ class Executor:
         if not self.s.stop_guard_enabled or self._clock() - self._guard_at < self.s.guard_interval_seconds:
             return None
         self._guard_at = self._clock()
+        try:
+            rows = self.client.open_orders()
+            self._resting_exits = {o.get("symbol") for o in rows if str(o.get("reduceOnly")).lower() == "true"}
+        except BinanceError as error:
+            log.warning("Open orders unavailable (%s); target check skipped this pass", error)
+            self._resting_exits = None
         try:
             return {o.get("clientAlgoId") for o in self.client.open_algo_orders()}
         except BinanceError as error:
@@ -298,7 +394,8 @@ class Executor:
         symbol, mark = trade["symbol"], float(position["markPrice"])
         sign = 1 if trade["side"] == "LONG" else -1
         stop_missing = trade["sl_id"] not in live_ids
-        tp_missing = bool(trade.get("tp_id")) and trade["tp_id"] not in live_ids
+        tp_missing = (bool(trade.get("tp_id")) and trade["tp_id"] not in live_ids and self._resting_exits is not None
+                      and symbol not in self._resting_exits)       # a triggered maker target rests as a reduce-only limit order
         if not (stop_missing or tp_missing):
             trade["guard_misses"] = 0
             return
@@ -349,13 +446,12 @@ class Executor:
     def _restore_target(self, trade: dict):
         symbol = trade["symbol"]
         exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
-        new_id = client_id("tp", symbol, int(self._clock() * 1000))
-        try:
-            self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", trade["take_profit"], new_id)
-        except BinanceError as error:
-            self._alert(f"guard:tp:{symbol}", f"{symbol}: hedef emri yeniden konulamadı ({error}).")
+        old_id, trade["tp_id"] = trade["tp_id"], client_id("tp", symbol, int(self._clock() * 1000))
+        if not self._place_target(trade):
+            trade["tp_id"] = old_id
+            self._alert(f"guard:tp:{symbol}", f"{symbol}: hedef emri yeniden konulamadı.")
             return
-        trade["tp_id"], trade["guard_misses"] = new_id, 0
+        trade["guard_misses"] = 0
         self.state.save()
         log.info("Take-profit of %s placed again at %s", symbol, trade["take_profit"])
 
@@ -484,6 +580,11 @@ class Executor:
         positions = {p["symbol"]: p for p in self.client.positions()}
         open_algos = self.client.open_algo_orders()
         live_ids = {o.get("clientAlgoId") for o in open_algos}
+        try:                                      # a triggered maker target rests as a reduce-only limit order: it still counts
+            resting = {o.get("symbol") for o in self.client.open_orders() if str(o.get("reduceOnly")).lower() == "true"}
+        except BinanceError as error:
+            log.warning("Open orders unavailable at startup (%s); targets are left as they are", error)
+            resting = None
         for symbol, trade in list(self.state["trades"].items()):
             if symbol not in positions:
                 self._finalize(trade)
@@ -497,13 +598,10 @@ class Executor:
                 except BinanceError as error:
                     self._emergency_close(symbol, exit_side, abs(float(positions[symbol]["positionAmt"])),
                                           f"Stop emri yeniden konulamadı ({error}); pozisyon kapatıldı.")
-            if trade.get("tp_id") and trade["tp_id"] not in live_ids:
+            if trade.get("tp_id") and trade["tp_id"] not in live_ids and resting is not None and symbol not in resting:
                 trade["tp_id"] = client_id("tp", symbol, int(self._clock() * 1000))
-                try:
-                    self.client.algo_order(symbol, exit_side, "TAKE_PROFIT_MARKET", trade["take_profit"], trade["tp_id"])
-                except BinanceError as error:
+                if not self._place_target(trade):
                     trade["tp_id"] = None
-                    log.warning("TP re-placement failed for %s: %s", symbol, error)
         for symbol in positions.keys() - self.state["trades"].keys():
             self._alert(f"untracked:{symbol}", f"{symbol}: bot tarafından açılmamış pozisyon var; bot buna dokunmaz.", every=86400)
         self.state.save()

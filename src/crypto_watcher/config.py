@@ -63,6 +63,13 @@ class Settings:
     cooldown_minutes: int = 120
     taker_fee: float = 0.0005
     max_cost_to_stop: float = 0.2      # round-trip fees / stop distance
+    # --- costs -------------------------------------------------------
+    bnb_fee_discount: bool = True      # ask Binance to take fees in BNB (discount; needs BNB in the futures wallet)
+    maker_entry: bool = True           # post-only limit at the best price first; whatever is not filled goes at market
+    maker_take_profit: bool = True     # target as a resting limit order (maker); falls back to a market target if refused
+    maker_time_stop: bool = True       # time-stop exit tries a post-only limit first, then the normal closing ladder
+    maker_wait_seconds: int = 20       # how long a post-only order may wait for a fill
+    maker_tp_trigger_r: float = 0.1    # the target's limit order is placed when price is this many R before the target
     # --- loop --------------------------------------------------------
     scan_interval_seconds: int = 300
     manage_interval_seconds: int = 20
@@ -107,11 +114,11 @@ class Settings:
             elif field.type == tuple[str, ...]:
                 if not isinstance(value, tuple) or not all(isinstance(v, str) for v in value):
                     raise ValueError(f"{field.name} must be an array of strings")
-        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "max_drift_atr", "min_trend_extension_atr"):
+        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "max_drift_atr", "min_trend_extension_atr", "maker_tp_trigger_r"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
         for name in ("kline_limit", "max_symbols", "leverage", "max_open_positions", "max_same_direction",
-                     "scan_interval_seconds", "manage_interval_seconds", "command_poll_seconds", "universe_refresh_minutes", "guard_interval_seconds",
+                     "scan_interval_seconds", "manage_interval_seconds", "command_poll_seconds", "universe_refresh_minutes", "guard_interval_seconds", "maker_wait_seconds",
                      "news_cache_minutes", "risk_fraction", "max_margin_fraction", "atr_stop_multiplier",
                      "tp_r", "minimum_rr", "taker_fee", "news_max_age_hours"):
             if getattr(self, name) <= 0:

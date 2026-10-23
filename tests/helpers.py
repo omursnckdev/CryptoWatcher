@@ -5,7 +5,8 @@ from crypto_watcher.data import SymbolInfo
 
 # The order-mechanics tests were written for (and still exercise) the original geometry: 2x ATR stop, 2R target, no
 # trend-strength / regime filter. The demo fixture's signals would not pass the new filters; strategy filters have their own tests.
-LEGACY = {"atr_stop_multiplier": 2.0, "tp_r": 2.0, "min_trend_extension_atr": 0.0, "allow_counter_regime": True}
+LEGACY = {"atr_stop_multiplier": 2.0, "tp_r": 2.0, "min_trend_extension_atr": 0.0, "allow_counter_regime": True,
+          "bnb_fee_discount": False, "maker_entry": False, "maker_take_profit": False, "maker_time_stop": False}
 
 
 def legacy_settings(**overrides) -> Settings:
@@ -34,6 +35,8 @@ class FakeExchange:
         self.reject_leverage_above = None
         self.forced, self.force_error = [], None
         self.reject_reduce_only, self.fail_plain_market, self.algo_list_error = set(), set(), None
+        self.orders, self.spread, self.fee_burn = {}, 0.0001, None
+        self.fail_cancel, self.refuse_limit_tp, self.book_error, self.open_orders_error = False, False, None, None
 
     # -- helpers
     def _log(self, *call):
@@ -96,7 +99,7 @@ class FakeExchange:
         return [f for f in self.fills if f["symbol"] == symbol and f["time"] >= start_ms]
 
     # -- orders
-    def _fill(self, symbol, side, qty, price):
+    def _fill(self, symbol, side, qty, price, rate=0.0005):
         signed = qty if side == "BUY" else -qty
         pos = self.pos.get(symbol)
         realized = 0.0
@@ -106,13 +109,15 @@ class FakeExchange:
             pos["amt"] += signed
             if abs(pos["amt"]) < 1e-12:
                 del self.pos[symbol]
-        elif pos:
-            raise AssertionError("fake does not model adding to positions")
+        elif pos:                                   # adding in the same direction: weighted average entry
+            total = pos["amt"] + signed
+            pos["entry"] = (pos["entry"] * abs(pos["amt"]) + price * qty) / abs(total)
+            pos["amt"] = total
         else:
             self.pos[symbol] = {"amt": signed, "entry": price}
-        self.wallet += realized - qty * price * 0.0005
+        self.wallet += realized - qty * price * rate
         self.fills.append({"symbol": symbol, "side": side, "price": str(price), "qty": str(qty),
-                           "realizedPnl": str(realized), "commission": str(qty * price * 0.0005),
+                           "realizedPnl": str(realized), "commission": str(qty * price * rate), "maker": rate < 0.0005,
                            "commissionAsset": "USDT", "time": int(self.clock() * 1000)})
 
     def market_order(self, symbol, side, quantity, reduce_only=False, client_id=None):
@@ -127,15 +132,72 @@ class FakeExchange:
         self._fill(symbol, side, quantity, self.prices[symbol])
         return {"status": "FILLED"}
 
-    def algo_order(self, symbol, side, order_type, trigger_price, client_id, quantity=None):
+    # -- maker order surface
+    def book_ticker(self, symbol):
+        if self.book_error:
+            raise self.book_error
+        p = self.prices[symbol]
+        return {"symbol": symbol, "bidPrice": str(p * (1 - self.spread)), "askPrice": str(p * (1 + self.spread))}
+
+    def set_fee_burn(self, on=True):
+        self._log("fee_burn", on)
+        if self.fee_burn:
+            raise self.fee_burn
+        return {"code": 200, "msg": "success"}
+
+    def limit_order(self, symbol, side, quantity, price, client_id, post_only=True, reduce_only=False):
+        self._log("limit", symbol, side, quantity, price, post_only, reduce_only)
+        book = self.book_ticker(symbol)
+        crosses = price >= float(book["askPrice"]) if side == "BUY" else price <= float(book["bidPrice"])
+        if post_only and crosses:
+            raise BinanceError("Due to the order could not be executed as maker, the Post Only order will be rejected.", -5022, 400)
+        self.orders[client_id] = {"clientOrderId": client_id, "symbol": symbol, "side": side, "price": price, "origQty": quantity,
+                                  "executedQty": 0.0, "status": "NEW", "reduceOnly": "true" if reduce_only else "false"}
+        return dict(self.orders[client_id])
+
+    def get_order(self, symbol, client_id):
+        if client_id not in self.orders:
+            raise BinanceError("Order does not exist.", -2013, 400)
+        return dict(self.orders[client_id])
+
+    def cancel_order(self, symbol, client_id):
+        self._log("cancel_order", symbol, client_id)
+        if self.fail_cancel:
+            raise BinanceError("Timeout", -1007, 503)
+        order = self.orders.get(client_id)
+        if not order or order["status"] not in ("NEW", "PARTIALLY_FILLED"):
+            raise BinanceError("Unknown order sent.", -2011, 400)
+        order["status"] = "CANCELED"
+        return dict(order)
+
+    def open_orders(self, symbol=None):
+        if self.open_orders_error:
+            raise self.open_orders_error
+        return [dict(o) for o in self.orders.values() if o["status"] in ("NEW", "PARTIALLY_FILLED") and (not symbol or o["symbol"] == symbol)]
+
+    def fill_order(self, client_id, quantity=None):
+        """The resting limit order trades (as a maker) at its own price."""
+        order = self.orders[client_id]
+        qty = order["origQty"] - order["executedQty"] if quantity is None else quantity
+        if order["reduceOnly"] == "true":
+            pos = self.pos.get(order["symbol"])
+            qty = min(qty, abs(pos["amt"])) if pos else 0.0
+        if qty > 0:
+            self._fill(order["symbol"], order["side"], qty, order["price"], rate=0.0002)
+        order["executedQty"] += qty
+        order["status"] = "FILLED" if order["executedQty"] >= order["origQty"] - 1e-12 or (order["reduceOnly"] == "true" and order["symbol"] not in self.pos) else "PARTIALLY_FILLED"
+
+    def algo_order(self, symbol, side, order_type, trigger_price, client_id, quantity=None, price=None):
         self._log("algo", symbol, side, order_type, trigger_price, client_id)
+        if order_type == "TAKE_PROFIT" and self.refuse_limit_tp:
+            raise BinanceError("Order type not supported for this symbol", -4120, 400)
         if order_type in self.fail_algo:
             raise BinanceError("Order type not supported", -4120, 400)
         mark = self.prices[symbol]
         sell_stop = order_type == "STOP_MARKET" and side == "SELL" and trigger_price >= mark
         buy_stop = order_type == "STOP_MARKET" and side == "BUY" and trigger_price <= mark
-        sell_tp = order_type == "TAKE_PROFIT_MARKET" and side == "SELL" and trigger_price <= mark
-        buy_tp = order_type == "TAKE_PROFIT_MARKET" and side == "BUY" and trigger_price >= mark
+        sell_tp = order_type in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT") and side == "SELL" and trigger_price <= mark
+        buy_tp = order_type in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT") and side == "BUY" and trigger_price >= mark
         if sell_stop or buy_stop or sell_tp or buy_tp:
             raise BinanceError("Order would immediately trigger", -2021, 400)
         if quantity is None:  # Binance allows one closePosition stop per direction (-4130)
@@ -145,7 +207,7 @@ class FakeExchange:
                 raise BinanceError("An open stop or take profit order with closePosition in the direction exists", -4130, 400)
         self.algos[client_id] = {"clientAlgoId": client_id, "orderType": order_type, "symbol": symbol, "side": side,
                                  "triggerPrice": trigger_price, "algoStatus": "NEW", "closePosition": quantity is None,
-                                 "quantity": quantity}
+                                 "quantity": quantity, "price": price}
         return {"clientAlgoId": client_id}
 
     def get_algo_order(self, client_id):
@@ -170,6 +232,9 @@ class FakeExchange:
 
     def cancel_all_orders(self, symbol):
         self._log("cancel_all", symbol)
+        for order in self.orders.values():
+            if order["symbol"] == symbol and order["status"] in ("NEW", "PARTIALLY_FILLED"):
+                order["status"] = "CANCELED"
 
     # -- simulation
     def strand(self, client_id, status="TRIGGERING"):
@@ -196,6 +261,19 @@ class FakeExchange:
             trig, sell = algo["triggerPrice"], algo["side"] == "SELL"
             hit = (price <= trig if sell else price >= trig) if algo["orderType"] == "STOP_MARKET" else \
                   (price >= trig if sell else price <= trig)
-            if hit:
+            if hit and algo["orderType"] == "TAKE_PROFIT":       # limit target: becomes a resting reduce-only limit order
+                algo["algoStatus"] = "TRIGGERED"
+                cid = algo["clientAlgoId"] + "-x"
+                self.orders[cid] = {"clientOrderId": cid, "symbol": symbol, "side": algo["side"], "price": algo["price"],
+                                    "origQty": algo["quantity"], "executedQty": 0.0, "status": "NEW", "reduceOnly": "true"}
+            elif hit:
                 algo["algoStatus"] = "TRIGGERED"
                 self._fill(symbol, algo["side"], abs(self.pos[symbol]["amt"]), trig)
+        for order in list(self.orders.values()):                 # resting limit orders trade when the price reaches them
+            if order["symbol"] != symbol or order["status"] not in ("NEW", "PARTIALLY_FILLED"):
+                continue
+            if order["reduceOnly"] == "true" and symbol not in self.pos:
+                order["status"] = "EXPIRED"
+                continue
+            if (price >= order["price"]) if order["side"] == "SELL" else (price <= order["price"]):
+                self.fill_order(order["clientOrderId"])
