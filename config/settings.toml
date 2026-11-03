@@ -60,6 +60,7 @@ stop_guard_enabled = true
 guard_interval_seconds = 60
 journal_enabled = true
 signal_log_enabled = true
+exit_lab_enabled = true        # /cikis: aynı sinyallerde 3 alternatif çıkış kuralı (kademeli / takip / uzun tutma), emir yok
 shadow_enabled = true
 
 # --- haber ------------------------------------------------------------

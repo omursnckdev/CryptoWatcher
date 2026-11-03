@@ -82,6 +82,7 @@ class Settings:
     guard_interval_seconds: int = 60
     journal_enabled: bool = True       # keep a per-trade journal (entry context, best/worst excursion, post-close follow-up) for /analiz
     signal_log_enabled: bool = True    # replay signals that position limits blocked, on real candles (no orders, no pushes)
+    exit_lab_enabled: bool = True      # replay three alternative EXIT rules on the same signals (no orders, no pushes); /cikis
     shadow_enabled: bool = True        # record the frozen "OI collapse + price down -> LONG" hypothesis (no orders, no pushes)
     # --- news --------------------------------------------------------
     news_enabled: bool = True

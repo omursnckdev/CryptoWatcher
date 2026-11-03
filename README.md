@@ -103,6 +103,7 @@ Komutlar (bot **çalışırken** cevap verir, Telegram'ın `/` menüsüne otomat
 | `/pnl` (`/kar`) | Bugün (kapanan + açık), tüm zamanlar, isabet oranı, son 5 işlem |
 | `/analiz` (`/gunluk`) | Kapanan işlemlerin teşhisi: neden kaybetti/kazandı, stoptan sonra fiyat ne yaptı |
 | `/atlanan` (`/limit`) | Pozisyon limitlerinin engellediği sinyaller açılsaydı ne getirirdi (simülasyon) |
+| `/cikis` (`/exits`) | Aynı sinyallerde 3 alternatif çıkış kuralı mevcut çıkışa göre ne getirirdi (gölge test) |
 | `/status` (`/durum`) | Bot durumu, bakiye, BTC rejimi |
 | `/top` | En yüksek skorlu 5 coin |
 | `/pause` · `/resume` | Yeni işlem açmayı durdur / sürdür (açık pozisyonlar yönetilmeye devam eder) |
@@ -301,7 +302,7 @@ bu durumda pozisyon haftalarca stopsuz kalabilir ve "sadece azalt" emirleri de r
 
 ## Sunucuda tam rapor (Telegram'sız)
 
-Bot tüm kayıtları `state/` klasöründe tutar (`state.json`, `journal.jsonl`, `signals.jsonl`, `shadow.jsonl`); Telegram komutları yalnızca bunları özetler.
+Bot tüm kayıtları `state/` klasöründe tutar (`state.json`, `journal.jsonl`, `signals.jsonl`, `exits.jsonl`, `shadow.jsonl`); Telegram komutları yalnızca bunları özetler.
 Hepsini tek seferde, **salt-okunur** olarak görmek için (hiçbir şey yazmaz, emir vermez, borsaya bağlanmaz):
 
 ```bash
@@ -309,7 +310,7 @@ cd ~/CryptoWatcher && git pull
 sudo docker compose exec -T cryptowatcher python - /app/state < tools/report.py
 ```
 
-Çıktı: genel durum, işlem günlüğü (R dağılımı, kapanış nedenleri, yön, gün gün ve coin bazında sonuç) ve `/analiz`, `/atlanan`, `/golge` özetleri.
+Çıktı: genel durum, işlem günlüğü (R dağılımı, kapanış nedenleri, yön, gün gün ve coin bazında sonuç) ve `/analiz`, `/atlanan`, `/cikis`, `/golge` özetleri.
 Belirli bir coini incelemek için: `sudo docker compose exec -T cryptowatcher python - HYPEUSDT < tools/diagnose.py`.
 
 ## Atlanan sinyaller (`/atlanan`)
@@ -328,6 +329,30 @@ botun kendi kurallarıyla yeniden oynatır: ATR stopu, hedef (`tp_r`), +1R'de ba
   birikmeden yorum yapılmaz. Atlananların ortalaması ≤ 0 ise limit zarar eden işlemleri engelliyor demektir; pozitifse ancak t ≥ 1,65 ise
   "fırsat kaçırıyor olabilir" denir, o zaman bile bu bir işarettir, kanıt değil.
 - Emir göndermez, Telegram'a otomatik mesaj atmaz. `signal_log_enabled = false` ile kapatılır; yalnızca mainnet verisiyle çalışır.
+
+## Çıkış kuralı testi (`/cikis`, gölge)
+
+Mevcut çıkış (1R stop = 3×ATR, 3R hedef, +1R'de başa baş, 48 saat) geçmiş testle seçildi; kademeli kâr alma veya takip eden stop
+daha iyi olabilir mi sorusu ise test edilmedi. Bunu canlı stratejiyi değiştirmeden ölçmek için `/atlanan`'ın sonuçlandırdığı **her sinyal**
+(açılan ve atlanan) aynı mainnet 5 dakikalık mumlarda, aynı maliyetle (komisyon + kayma), dört çıkış kuralıyla yeniden oynatılır
+(`src/crypto_watcher/exitlab.py`, `state/exits.jsonl`). Kurallar `claude-trading-skills` deposundaki `exit-strategies` beceresinden alındı
+ve 2026-11-03'te **donduruldu**:
+
+| Kural | Tanım |
+|---|---|
+| Mevcut | canlıdaki kural (karşılaştırma tabanı); `/atlanan` simülasyonuyla birebir aynı olmalı, farklıysa `⚠️` satırı çıkar |
+| Kademeli | ⅓ 2R'de, ⅓ 3R'de kapanır; son ⅓ takip eden stopla: 2R'ye ulaşınca stop zirvenin 1R (=3×ATR) gerisinden izler |
+| Takip | sabit hedef yok; +1R'de başa baş, 2R'den sonra zirvenin 1R gerisinden takip eden stop |
+| Zaman+ | mevcut kural, ama 48 saat dolduğunda pozisyon kârdaysa 96 saate kadar tutulur |
+
+- Karşılaştırma **eşlidir**: aynı sinyal, aynı mumlar, aynı maliyet; yalnızca çıkış farklı. Belirsiz mum kuralı `/atlanan` ile aynıdır
+  (aynı mum hem stopa hem bir hedefe değdiyse stop), başa baş ve takip eden stop tetiklendikleri mumdan **sonraki** mumda devreye girer.
+- **Önceden yazılmış karar kuralı** (`DECISION`): en az 150 sinyal ve 90 gün; bir kural ancak mevcut çıkışa göre farkı **≥ +0,03R/sinyal**,
+  gün-kümeli **t ≥ 2,0** (üç kural birden sınandığı için tek hipotezdeki 1,65'ten sıkı) ve dönemin **iki yarısında da pozitifse** önerilir.
+  Birden fazlası geçerse farkı en büyük olan adı verilir. Öneri bile otomatik uygulanmaz.
+- Eski sinyaller de (dosyada ne varsa) geçmiş mumlarla oynatılır; ilk açılışta biriken iş her 5 dakikada 25 sinyal olarak eritilir.
+- Emir göndermez, Telegram'a otomatik mesaj atmaz, hata olursa işlem döngüsünü etkilemez. `exit_lab_enabled = false` ile kapatılır;
+  sinyal kaydı açık ve veri kaynağı mainnet olmalıdır.
 
 ## Gölge kayıt (işlemsiz hipotez testi)
 
