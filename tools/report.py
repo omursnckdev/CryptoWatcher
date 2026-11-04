@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from crypto_watcher import telegram as tg
 from crypto_watcher.config import Settings
+from crypto_watcher.exitlab import ExitLab
 from crypto_watcher.journal import Journal, KIND_TEXT
 from crypto_watcher.shadow import ShadowRecorder
 from crypto_watcher.signals import SignalLog, _t_stat
@@ -156,6 +157,15 @@ def report(state_dir: str | Path) -> str:
     signals = SignalLog(state_dir / "signals.jsonl", None, Settings())
     section("/atlanan", plain(signals.format_summary(journal)))
     section("Atlanan sinyaller: grup tablosu", signal_groups(signals))
+
+    exits_path = state_dir / "exits.jsonl"
+    if exits_path.is_file():
+        with tempfile.TemporaryDirectory() as scratch:        # read-only: never touch the bot's own file
+            copy = Path(scratch) / "exits.jsonl"
+            shutil.copyfile(exits_path, copy)
+            section("/cikis", plain(ExitLab(copy, None, Settings(), signals).format_summary()))
+    else:
+        section("/cikis", "exits.jsonl yok")
 
     shadow_path = state_dir / "shadow.jsonl"
     if shadow_path.is_file():
