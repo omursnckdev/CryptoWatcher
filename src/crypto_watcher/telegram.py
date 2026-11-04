@@ -207,7 +207,8 @@ def _news_tag(candidate: dict) -> str:
 def fmt_open(trade: dict, candidate: dict, verbose: bool = False) -> str:
     side, entry = trade["side"], trade["entry"]
     result = candidate["sides"][side]
-    lines = [f"{_icon(side)} <b>{esc(side)} {esc(trade['symbol'])}</b> {trade['leverage']}x @ {price(entry)} · skor {result['score']:.0f}",
+    flip = f" · 🔄 ters ({esc(candidate['orig_side'])} sinyali)" if candidate.get("inverted") else ""
+    lines = [f"{_icon(side)} <b>{esc(side)} {esc(trade['symbol'])}</b> {trade['leverage']}x @ {price(entry)} · skor {result['score']:.0f}{flip}",
              f"SL {price(trade['stop'])} ({_pct(side, entry, trade['stop']):+.1f}%) · TP {price(trade['take_profit'])} "
              f"({_pct(side, entry, trade['take_profit']):+.1f}%) · risk {money(trade['planned_risk'], 0)} USDT{_news_tag(candidate)}"]
     if verbose:
@@ -228,7 +229,7 @@ def fmt_signals(candidates: list[dict], limit: int = 5) -> str:
     lines = [f"🔔 <b>{len(candidates)} sinyal</b> (dry-run: emir yok)"]
     for c in candidates[:limit]:
         plan = c["sides"][c["side"]]["risk_plan"]
-        lines.append(f"{_icon(c['side'])} {esc(c['side'])} <code>{esc(c['symbol'])}</code> skor {c['score']:.0f} · "
+        lines.append(f"{_icon(c['side'])} {esc(c['side'])}{' 🔄' if c.get('inverted') else ''} <code>{esc(c['symbol'])}</code> skor {c['score']:.0f} · "
                      f"@ {price(plan['entry'])} SL {price(plan['stop'])} TP {price(plan['take_profit'])}")
     if len(candidates) > limit:
         lines.append(f"… +{len(candidates) - limit} daha (/top)")

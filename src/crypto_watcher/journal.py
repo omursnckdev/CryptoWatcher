@@ -137,7 +137,7 @@ def build_record(trade: dict, outcome: dict) -> dict:
               "mfe_r": round(work.get("mfe_r", 0.0), 2), "mae_r": round(work.get("mae_r", 0.0), 2),
               "mfe_h": _hours(work.get("mfe_ms"), trade["opened_ms"]), "mae_h": _hours(work.get("mae_ms"), trade["opened_ms"]),
               "hold_h": round(max(0, outcome["closed_ms"] - trade["opened_ms"]) / HOUR_MS, 2),
-              "breakeven": bool(trade.get("breakeven_done")), "entry_ctx": trade.get("snap"), "after": None}
+              "breakeven": bool(trade.get("breakeven_done")), "inverted": bool(trade.get("inverted")), "entry_ctx": trade.get("snap"), "after": None}
     record["kind"] = diagnose(record)
     return record
 

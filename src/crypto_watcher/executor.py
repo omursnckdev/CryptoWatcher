@@ -154,7 +154,7 @@ class Executor:
                  "opened_ms": opened_ms, "sl_id": client_id("sl", symbol, opened_ms), "tp_id": client_id("tp", symbol, opened_ms), "breakeven_done": False,
                  "breakeven_r": self.s.breakeven_r, "be_failures": 0, "finalize_attempts": 0,
                  "planned_risk": quantity * distance, "risk_reward": self.s.tp_r, "score": candidate["score"],
-                 "signal": candidate["signal"],
+                 "signal": candidate["signal"], "inverted": bool(candidate.get("inverted")),
                  "mfe_r": 0.0, "mae_r": 0.0}
         try:
             trade["snap"] = jr.snapshot(candidate)

@@ -536,3 +536,59 @@ class BotTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InvertTests(Base):
+    def test_invert_swaps_side_signal_and_mirrors_the_plan_without_touching_the_report(self):
+        from crypto_watcher.strategy import invert
+        original = self.cands["DOGEUSDT"]
+        before = original["sides"]["SHORT"] if "SHORT" in original["sides"] else None
+        flipped = invert(original)
+        self.assertEqual((flipped["side"], flipped["orig_side"], flipped["inverted"]), ("SHORT", "LONG", True))
+        self.assertEqual(flipped["signal"], original["signal"].replace("LONG", "SHORT"))
+        self.assertEqual(flipped["sides"]["SHORT"]["score"], original["sides"]["LONG"]["score"])
+        plan, orig = flipped["sides"]["SHORT"]["risk_plan"], original["sides"]["LONG"]["risk_plan"]
+        self.assertGreater(plan["stop"], plan["entry"])
+        self.assertLess(plan["take_profit"], plan["entry"])
+        self.assertAlmostEqual(plan["stop"] - plan["entry"], orig["entry"] - orig["stop"])
+        self.assertEqual(original["side"], "LONG")                       # report untouched
+        self.assertIs(original["sides"].get("SHORT"), before)
+        self.assertEqual(orig["side"], "LONG")
+        self.assertEqual(invert(self.cands["XRPUSDT"])["side"], "LONG")
+
+    def test_inverted_long_signal_opens_a_protected_short(self):
+        from crypto_watcher.strategy import invert
+        trade = self.executor.open_trade(invert(self.cands["DOGEUSDT"]))
+        self.assertIsNotNone(trade, self.messages())
+        self.assertEqual((trade["side"], trade["inverted"]), ("SHORT", True))
+        self.assertEqual(self.ex.kinds("market")[0][2], "SELL")
+        algos = {a["orderType"]: a for a in self.ex.algos.values()}
+        self.assertEqual(algos["STOP_MARKET"]["side"], "BUY")
+        self.assertGreater(algos["STOP_MARKET"]["triggerPrice"], trade["entry"])
+        self.assertLess(algos["TAKE_PROFIT_MARKET"]["triggerPrice"], trade["entry"])
+        self.assertIn("SHORT DOGEUSDT", self.messages())
+        self.assertIn("ters (LONG sinyali)", self.messages())
+
+    def test_bot_in_invert_mode_trades_every_signal_the_other_way(self):
+        settings = legacy_settings(min_quote_volume=1.0, invert_direction=True)
+        executor = Executor(self.ex, settings, self.state, self.notifier, make_infos(self.symbols), self.clock)
+        executor.roll_day(15_000.0)
+        bot = Bot(settings, self.demo, "demo", None, self.notifier, self.state, executor, self.ex, None, self.clock,
+                  sleep=lambda s: None)
+        bot.start()
+        bot.tick()
+        sides = {s: t["side"] for s, t in self.state["trades"].items()}
+        self.assertEqual(sides["DOGEUSDT"], "SHORT")
+        self.assertEqual(sides["XRPUSDT"], "LONG")
+        self.assertTrue(all(t["inverted"] for t in self.state["trades"].values()))
+        self.assertEqual({c["symbol"]: c["side"] for c in actionable(bot.report)}["DOGEUSDT"], "LONG")  # /top still shows the signal
+        self.assertIn("TERS MOD", bot._status())
+
+    def test_default_is_not_inverted(self):
+        self.assertFalse(Settings().invert_direction)
+        self.assertNotIn("TERS MOD", self.make_bot_status())
+
+    def make_bot_status(self):
+        bot = Bot(self.settings, self.demo, "demo", None, self.notifier, self.state, self.executor, self.ex, None, self.clock,
+                  sleep=lambda s: None)
+        return bot._status()

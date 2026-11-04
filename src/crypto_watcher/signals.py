@@ -151,6 +151,8 @@ class SignalLog:
         record = {"k": "sig", "id": key, "symbol": candidate["symbol"], "side": side, "date": candidate["date"], "seen_ms": now_ms,
                   "distance_frac": plan["risk_distance"] / plan["entry"], "score": round(float(candidate["score"]), 1),
                   "regime": candidate.get("market_regime"), "status": status, "trade_id": trade_id}
+        if candidate.get("inverted"):           # traded against the signal: `side` is what was traded, this is what was signalled
+            record["orig_side"] = candidate["orig_side"]
         if confirm is not None:
             try:
                 record["mtf"] = confirm()

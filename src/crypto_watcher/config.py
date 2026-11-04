@@ -38,6 +38,7 @@ class Settings:
     counter_regime_penalty: float = 10.0       # only used when allow_counter_regime is true
     allow_counter_regime: bool = False         # backtest 2023-26: trades against the BTC regime lost ~0.12R each
     min_trend_extension_atr: float = 2.0       # close must be this many ATR beyond EMA20 in the trade direction (0 = off)
+    invert_direction: bool = False             # trade the OPPOSITE of every signal (same filters, stop/target mirrored)
     allow_long: bool = True
     allow_short: bool = True
     max_drift_atr: float = 1.0

@@ -188,3 +188,22 @@ def evaluate(symbol: str, f1: pd.DataFrame, f4: pd.DataFrame, btc: pd.DataFrame 
             "indicators": {k: float(row[k]) for k in ("close", "ema20", "ema50", "ema200", "rsi", "macd", "macd_signal",
                                                        "macd_hist", "bb_pctb", "bb_upper", "bb_lower", "atr", "adx",
                                                        "volume_ratio", "taker_ratio")}}
+
+
+OPPOSITE = {"LONG": "SHORT", "SHORT": "LONG"}
+
+
+def invert(candidate: dict) -> dict:
+    """The same decision traded the other way: a LONG signal becomes a SHORT (and vice versa). Every filter and the score
+    belong to the original side; its result moves under the new side's key with the stop and target mirrored around entry.
+    Returns a copy; the report the candidate came from is not touched."""
+    side, new = candidate["side"], OPPOSITE[candidate["side"]]
+    result = dict(candidate["sides"][side])
+    plan = result.get("risk_plan")
+    if plan:
+        e = plan["entry"]
+        result["risk_plan"] = {**plan, "side": new, "stop": 2 * e - plan["stop"], "take_profit": 2 * e - plan["take_profit"]}
+    sides = dict(candidate["sides"])
+    sides[new] = result
+    return {**candidate, "side": new, "signal": candidate["signal"].replace(side, new), "sides": sides,
+            "orig_side": side, "inverted": True}

@@ -18,6 +18,7 @@ strong_score = 80
 allow_counter_regime = false   # BTC rejimine ters işlem yok (2023-26 testinde işlem başı ~-0,12R)
 counter_regime_penalty = 10    # yalnızca allow_counter_regime = true iken: ters yönde eşik +10
 min_trend_extension_atr = 2.0  # fiyat işlem yönünde EMA20'den en az bu kadar ATR uzakta olmalı (0 = kapalı)
+invert_direction = true       # TERS MOD: her sinyalin tam tersini aç (LONG sinyali → SHORT); filtreler aynı, SL/TP aynalanır
 allow_long = true
 allow_short = true
 

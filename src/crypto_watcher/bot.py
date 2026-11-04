@@ -8,6 +8,7 @@ from .binance import BinanceError, MarketClient, TESTNET_URL
 from .config import Settings
 from .data import CachedProvider, choose_market_source, parse_exchange_info, select_universe
 from .engine import actionable, scan
+from .strategy import invert
 from .news import NewsService
 from . import mtf
 from .signals import NOT_OPENED, TAKEN, SignalLog, skip_label
@@ -157,6 +158,8 @@ class Bot:
             log.warning("Scan error %s: %s", error["symbol"], error["error"])
         fresh = []
         for candidate in sorted(actionable(report), key=lambda c: -c["score"]):
+            if self.s.invert_direction:
+                candidate = invert(candidate)
             symbol = candidate["symbol"]
             if self.state["signaled"].get(symbol) == candidate["date"]:
                 continue  # one attempt per symbol per candle
@@ -264,6 +267,8 @@ class Bot:
         trades = self.state["trades"]
         line = (f"ℹ️ {'DURAKLATILDI' if self.state['paused'] else 'aktif'}{' (dry-run)' if self.dry_run else ''} · "
                 f"{len(trades)}/{self.s.max_open_positions} pozisyon")
+        if self.s.invert_direction:
+            line += "\n🔄 TERS MOD: her sinyalin tersi açılıyor (LONG sinyali → SHORT, SHORT → LONG)"
         if self.report:
             line += f" · BTC {tg.esc(self.report['market_regime'])} · {len(self.universe)} coin · veri {tg.esc(self.source)}"
         if self.executor:
