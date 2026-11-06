@@ -24,6 +24,17 @@ def sim(side, rows, frac=0.02, **override):
 class SimulateTests(unittest.TestCase):
     # LONG: entry 100, distance 2 -> stop 98, target 104; round-trip cost = 2 * 0.0007 * 100 / 2 = 0.07R
 
+    def test_profit_lock_keeps_one_r_after_two_r(self):
+        lock = dict(tp_r=3.0, lock_r=2.0, lock_stop_r=1.0)
+        rows = [(100, 101, 99.5, 100.5), (100.5, 104.2, 100.5, 104), (104, 104.5, 99.9, 100.2)]
+        r = sim("LONG", rows, **lock)
+        self.assertEqual((r["exit"], r["gross_r"]), ("LOCK", 1.0))
+        self.assertEqual(sim("LONG", rows, tp_r=3.0)["exit"], "BE")                      # without the lock: breakeven
+        short = sim("SHORT", [(100, 100.5, 99, 99.5), (99.5, 99.5, 95.8, 96), (96, 100.2, 95.5, 99.8)], **lock)
+        self.assertEqual((short["exit"], short["gross_r"]), ("LOCK", 1.0))
+        self.assertEqual(sim("LONG", rows[:2] + [(104, 106.5, 103, 106)], **lock)["exit"], "TP")   # still reaches 3R
+
+
     def test_take_profit(self):
         r = sim("LONG", [(100, 101, 99.5, 100.5), (100.5, 104.5, 100, 104)])
         self.assertEqual((r["exit"], r["gross_r"], r["net_r"]), ("TP", 2.0, 1.93))

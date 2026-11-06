@@ -49,8 +49,9 @@ class ReplayEquivalenceTests(unittest.TestCase):
                          fee=0.0005)
             rows = random_path(rng, rng.randint(1, 700), side)
             frac = rng.choice((0.01, 0.02, 0.04))
-            old = sg.simulate(side, frac, bars(rows), **rules)
-            new = xl.replay(side, frac, bars(rows), **rules)
+            lock = rng.choice(({}, dict(lock_r=2.0, lock_stop_r=1.0))) if rules["tp_r"] == 3.0 else {}
+            old = sg.simulate(side, frac, bars(rows), **rules, **lock)
+            new = xl.replay(side, frac, bars(rows), **rules, **lock)
             if old is None:
                 self.assertIsNone(new, trial)
                 continue

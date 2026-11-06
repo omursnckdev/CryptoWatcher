@@ -60,6 +60,8 @@ class Settings:
     tp_r: float = 3.0
     minimum_rr: float = 1.5
     breakeven_r: float = 1.0           # move stop to entry after +1R; 0 disables
+    lock_r: float = 2.0                # after +2R move the stop to +lock_stop_r (profit lock); 0 disables
+    lock_stop_r: float = 1.0
     max_hold_hours: float = 48.0       # 0 disables
     cooldown_minutes: int = 120
     taker_fee: float = 0.0005
@@ -116,7 +118,7 @@ class Settings:
             elif field.type == tuple[str, ...]:
                 if not isinstance(value, tuple) or not all(isinstance(v, str) for v in value):
                     raise ValueError(f"{field.name} must be an array of strings")
-        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "max_drift_atr", "min_trend_extension_atr", "maker_tp_trigger_r"):
+        for name in ("min_quote_volume", "capital_usdt", "max_hold_hours", "breakeven_r", "lock_r", "lock_stop_r", "max_drift_atr", "min_trend_extension_atr", "maker_tp_trigger_r"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
         for name in ("kline_limit", "max_symbols", "leverage", "max_open_positions", "max_same_direction",
@@ -135,6 +137,8 @@ class Settings:
             raise ValueError("tp_r must be >= minimum_rr")
         if not 0 <= self.breakeven_r < self.tp_r:
             raise ValueError("breakeven_r must be in [0, tp_r)")
+        if self.lock_r and not 0 < self.lock_stop_r < self.lock_r < self.tp_r:
+            raise ValueError("profit lock needs 0 < lock_stop_r < lock_r < tp_r")
         if not (self.watch_score < self.entry_score <= self.strong_score <= 100):
             raise ValueError("Require watch_score < entry_score <= strong_score <= 100")
         if self.extreme_funding < self.crowded_funding:

@@ -40,11 +40,13 @@ def skip_label(reason: str) -> str | None:
     return None
 
 
-def simulate(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeven_r: float, hold_hours: float, fee: float) -> dict | None:
+def simulate(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeven_r: float, hold_hours: float, fee: float,
+             lock_r: float = 0.0, lock_stop_r: float = 0.0) -> dict | None:
     """Replay one trade on 5-minute bars [open_time, open, high, low, close, ...]; entry = open of the first bar.
 
     Ambiguous bars are resolved against the trade where the order inside a bar is unknowable: a bar that touches both stop and
-    target counts as stopped. Breakeven protection starts with the bar AFTER the one that reached +breakeven_r. Returns None while
+    target counts as stopped. Breakeven protection (and the profit lock: stop to +lock_stop_r after +lock_r) starts with the bar
+    AFTER the one that reached its trigger. Returns None while
     the bars do not yet decide the outcome."""
     if not bars or not distance_frac > 0:
         return None
@@ -53,7 +55,8 @@ def simulate(side: str, distance_frac: float, bars: list, *, tp_r: float, breake
     distance = distance_frac * entry
     stop, take = entry - sign * distance, entry + sign * tp_r * distance
     be_stop = entry * (1 + sign * 2 * fee)
-    armed, mfe, mae = False, 0.0, 0.0
+    armed = locked = False
+    mfe = mae = 0.0
     start, hold_ms = int(bars[0][0]), hold_hours * HOUR_MS
     exit_price = reason = None
     for bar in bars:
@@ -62,13 +65,16 @@ def simulate(side: str, distance_frac: float, bars: list, *, tp_r: float, breake
         mfe, mae = max(mfe, sign * (best - entry) / distance), min(mae, sign * (worst - entry) / distance)
         if sign * (worst - stop) <= 0:
             exit_price = stop if sign * (o - stop) > 0 else o          # a gap through the stop fills at the open
-            reason = "BE" if armed else "SL"
+            reason = "LOCK" if locked else "BE" if armed else "SL"
             break
         if sign * (best - take) >= 0:
             exit_price, reason = take, "TP"
             break
         if breakeven_r and not armed and sign * (best - entry) >= breakeven_r * distance:
             armed, stop = True, be_stop
+        if lock_r and not locked and sign * (best - entry) >= lock_r * distance:
+            lock_stop = entry + sign * lock_stop_r * distance
+            locked, stop = True, (lock_stop if sign * (lock_stop - stop) > 0 else stop)
         if hold_hours and opened + BAR_MS - start >= hold_ms:
             exit_price, reason = close, "TIME"
             break
@@ -179,7 +185,8 @@ class SignalLog:
                 bars = self.market.klines(signal["symbol"], BAR, 700, start_ms=signal["seen_ms"], end_ms=now_ms)
                 bars = [b for b in bars if int(b[0]) + BAR_MS <= now_ms]          # closed bars only
                 outcome = simulate(signal["side"], signal["distance_frac"], bars, tp_r=self.s.tp_r, breakeven_r=self.s.breakeven_r,
-                                   hold_hours=self.s.max_hold_hours, fee=self.s.taker_fee)
+                                   hold_hours=self.s.max_hold_hours, fee=self.s.taker_fee, lock_r=self.s.lock_r,
+                                   lock_stop_r=self.s.lock_stop_r)
             except Exception as error:
                 errors.append(f"{signal['symbol']}: {type(error).__name__}: {error}")
                 continue

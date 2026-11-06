@@ -5,7 +5,7 @@ from crypto_watcher.data import SymbolInfo
 
 # The order-mechanics tests were written for (and still exercise) the original geometry: 2x ATR stop, 2R target, no
 # trend-strength / regime filter. The demo fixture's signals would not pass the new filters; strategy filters have their own tests.
-LEGACY = {"atr_stop_multiplier": 2.0, "tp_r": 2.0, "min_trend_extension_atr": 0.0, "allow_counter_regime": True,
+LEGACY = {"atr_stop_multiplier": 2.0, "tp_r": 2.0, "lock_r": 0.0, "min_trend_extension_atr": 0.0, "allow_counter_regime": True,
           "bnb_fee_discount": False, "maker_entry": False, "maker_take_profit": False, "maker_time_stop": False}
 
 

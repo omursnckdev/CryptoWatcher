@@ -34,6 +34,8 @@ max_daily_loss_fraction = 0.05 # günlük gerçekleşen zarar bu orana ulaşırs
 atr_stop_multiplier = 3.0      # geniş stop: komisyon+kayma R başına daha ucuz
 tp_r = 3.0
 breakeven_r = 1.0              # +1R'de stop girişe çekilir (0 = kapalı)
+lock_r = 2.0                   # kâr kilidi: +2R'de stop +lock_stop_r'ye çekilir (0 = kapalı)
+lock_stop_r = 1.0
 max_hold_hours = 48
 cooldown_minutes = 120
 

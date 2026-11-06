@@ -11,7 +11,7 @@ from .net import make_session
 log = logging.getLogger(__name__)
 LIMIT = 4000  # Telegram caps messages at 4096 characters
 
-SHORT_REASONS = {"STOP_LOSS": "stop", "TAKE_PROFIT": "hedef", "BREAKEVEN_STOP": "başa baş stop",
+SHORT_REASONS = {"STOP_LOSS": "stop", "TAKE_PROFIT": "hedef", "BREAKEVEN_STOP": "başa baş stop", "PROFIT_STOP": "kâr kilidi stopu",
                  "TIME_STOP": "zaman stopu", "EXTERNAL": "dışarıdan kapandı",
                  "GUARD_CLOSE": "stop kurulamadığı için kapatıldı", "LIQUIDATION": "⚠️ likidasyon (fiyat stopu atladı)", "ADL": "⚠️ ADL (borsa zorla azalttı)"}
 
@@ -248,6 +248,10 @@ def fmt_close(trade: dict, outcome: dict, why: str = "") -> str:
 
 def fmt_breakeven(trade: dict, new_stop: float, mark: float) -> str:
     return f"🛡 {esc(trade['symbol'])} stop başa baş: {price(new_stop)}"
+
+
+def fmt_lock(trade: dict, new_stop: float, lock_stop_r: float) -> str:
+    return f"🔐 {esc(trade['symbol'])} kâr kilitlendi: stop {price(new_stop)} (+{lock_stop_r:g}R)"
 
 
 def fmt_warning(text: str) -> str:

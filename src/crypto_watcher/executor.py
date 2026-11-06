@@ -26,6 +26,13 @@ def client_id(kind: str, symbol: str, ms: int) -> str:
     return f"cw-{kind}-{ms:x}{zlib.crc32(symbol.encode()) & 0xfffff:05x}"
 
 
+def stop_reason(trade: dict) -> str:
+    """Close reason when the trade's current stop is hit."""
+    if trade.get("lock_done"):
+        return "PROFIT_STOP"
+    return "BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS"
+
+
 def _today(clock) -> str:
     return datetime.fromtimestamp(clock(), timezone.utc).strftime("%Y-%m-%d")
 
@@ -352,7 +359,8 @@ class Executor:
                 jr.track(trade, float(position["markPrice"]), int(self._clock() * 1000))
                 if self._time_stop(trade, position):
                     continue
-                if self._breakeven(trade, float(position["markPrice"])):
+                mark = float(position["markPrice"])
+                if self._breakeven(trade, mark) or self._lock_profit(trade, mark):
                     continue                                   # the stop id changed this tick: judge it on the next pass
                 if live_ids is not None:
                     self._guard(trade, position, live_ids)
@@ -410,7 +418,7 @@ class Executor:
                 return
             if outcome == "failed" and trade.get("restore_failures", 0) < RESTORE_ATTEMPTS:
                 return                                              # retried on the next pass; the position is only closed after repeated failures
-            hint = "GUARD_CLOSE" if outcome == "failed" else ("BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS")
+            hint = "GUARD_CLOSE" if outcome == "failed" else stop_reason(trade)
             self._force_close(trade, hint)                          # price through the stop, or a stop that cannot be placed again
             return
         if sign * (mark - trade["take_profit"]) >= 0:             # the target is already reached but its order is gone
@@ -461,27 +469,57 @@ class Executor:
         sign = 1 if trade["side"] == "LONG" else -1
         if sign * (mark - trade["entry"]) < trade["breakeven_r"] * trade["risk_distance"]:
             return
-        info, symbol = self.infos[trade["symbol"]], trade["symbol"]
+        info = self.infos[trade["symbol"]]
         # stop slightly beyond entry so fees are covered
         new_stop = round_step(trade["entry"] * (1 + sign * 2 * self.s.taker_fee), info.tick, ROUND_HALF_UP)
         if sign * (mark - new_stop) <= 0:
             return
-        exit_side = "SELL" if sign > 0 else "BUY"
-        new_id = client_id("be", symbol, int(self._clock() * 1000))
+        if not self._move_stop(trade, new_stop, "be"):
+            trade["be_failures"] += 1
+            self.state.save()
+            return
+        trade["breakeven_done"] = True
+        self.state.save()
+        if self.s.notify_breakeven:
+            self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
+        return True
+
+    def _lock_profit(self, trade: dict, mark: float) -> bool:
+        """After +lock_r move the stop to +lock_stop_r, so a trade that has shown that much profit keeps part of it."""
+        if not self.s.lock_r or trade.get("lock_done") or trade.get("lock_failures", 0) >= 3:
+            return False
+        sign = 1 if trade["side"] == "LONG" else -1
+        distance = trade["risk_distance"]
+        if sign * (mark - trade["entry"]) < self.s.lock_r * distance:
+            return False
+        new_stop = round_step(trade["entry"] + sign * self.s.lock_stop_r * distance, self.infos[trade["symbol"]].tick, ROUND_HALF_UP)
+        if sign * (mark - new_stop) <= 0:
+            return False
+        if sign * (new_stop - trade["stop"]) > 0 and not self._move_stop(trade, new_stop, "lk"):
+            trade["lock_failures"] = trade.get("lock_failures", 0) + 1
+            self.state.save()
+            return False
+        trade["lock_done"] = True
+        self.state.save()
+        if self.s.notify_breakeven:
+            self.notify.send(tg.fmt_lock(trade, trade["stop"], self.s.lock_stop_r))
+        return True
+
+    def _move_stop(self, trade: dict, new_stop: float, prefix: str) -> bool:
+        """Place the new stop first, then cancel the old one (the position is never without a stop)."""
+        symbol = trade["symbol"]
+        exit_side = "SELL" if trade["side"] == "LONG" else "BUY"
+        new_id = client_id(prefix, symbol, int(self._clock() * 1000))
         try:
             # reduce-only (not closePosition): Binance allows a single closePosition stop per direction
             self.client.algo_order(symbol, exit_side, "STOP_MARKET", new_stop, new_id, quantity=trade["quantity"])
         except BinanceError as error:
-            trade["be_failures"] += 1
-            self.state.save()
-            self._alert(f"be:{symbol}", f"{symbol}: stop başa başa çekilemedi ({error}); eski stop yerinde.")
-            return
+            self._alert(f"{prefix}:{symbol}", f"{symbol}: stop {tg.price(new_stop)} seviyesine çekilemedi ({error}); eski stop yerinde.")
+            return False
         old_id = trade["sl_id"]
-        trade.update(sl_id=new_id, stop=new_stop, breakeven_done=True)
+        trade.update(sl_id=new_id, stop=new_stop)
         self.state.save()
         self.client.cancel_algo_order(old_id)
-        if self.s.notify_breakeven:
-            self.notify.send(tg.fmt_breakeven(trade, new_stop, mark))
         return True
 
     def _forced_close(self, trade: dict) -> str | None:
@@ -500,7 +538,7 @@ class Executor:
         forced = self._forced_close(trade)
         if forced:
             return forced
-        for key, reason in (("sl_id", "BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS"),
+        for key, reason in (("sl_id", stop_reason(trade)),
                             ("tp_id", "TAKE_PROFIT")):
             if not trade.get(key):
                 continue
@@ -515,7 +553,7 @@ class Executor:
             if abs(exit_price - trade["take_profit"]) <= tolerance:
                 return "TAKE_PROFIT"
             if abs(exit_price - trade["stop"]) <= tolerance:
-                return "BREAKEVEN_STOP" if trade["breakeven_done"] else "STOP_LOSS"
+                return stop_reason(trade)
         return "EXTERNAL"
 
     def _finalize(self, trade: dict, hint: str | None = None):

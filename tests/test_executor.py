@@ -592,3 +592,71 @@ class InvertTests(Base):
         bot = Bot(self.settings, self.demo, "demo", None, self.notifier, self.state, self.executor, self.ex, None, self.clock,
                   sleep=lambda s: None)
         return bot._status()
+
+
+class ProfitLockTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.settings = legacy_settings(min_quote_volume=1.0, tp_r=3.0, lock_r=2.0, lock_stop_r=1.0)
+        self.executor = Executor(self.ex, self.settings, self.state, self.notifier, make_infos(self.symbols), self.clock)
+        self.executor.roll_day(15_000.0)
+
+    def at(self, symbol, trade, r):
+        sign = 1 if trade["side"] == "LONG" else -1
+        self.ex.move(symbol, trade["entry"] + sign * r * trade["risk_distance"])
+        self.executor.manage()
+
+    def test_lock_moves_the_stop_to_plus_one_r_after_two_r(self):
+        trade = self.open("DOGEUSDT")
+        self.at("DOGEUSDT", trade, 1.1)                         # breakeven first
+        self.assertTrue(trade["breakeven_done"])
+        self.assertFalse(trade.get("lock_done"))
+        be_id = trade["sl_id"]
+        self.at("DOGEUSDT", trade, 1.9)
+        self.assertFalse(trade.get("lock_done"))                 # not yet
+        self.at("DOGEUSDT", trade, 2.05)
+        self.assertTrue(trade["lock_done"])
+        self.assertAlmostEqual(trade["stop"], trade["entry"] + trade["risk_distance"], delta=trade["entry"] * 1e-4)
+        order = [c[0] + ":" + c[-1] for c in self.ex.calls if c[0] in ("algo", "cancel_algo")]
+        self.assertLess(order.index(f"algo:{trade['sl_id']}"), order.index(f"cancel_algo:{be_id}"))   # new stop first
+        self.assertIn("kâr kilitlendi", self.messages())
+        stops = [a for a in self.ex.algos.values() if a["orderType"] == "STOP_MARKET" and a["algoStatus"] == "NEW"]
+        self.assertEqual(len(stops), 1)
+        self.at("DOGEUSDT", trade, 2.5)                          # only once
+        self.assertEqual(len([c for c in self.ex.calls if c[0] == "algo" and c[-1].startswith("cw-lk-")]), 1)
+        # price falls back through the locked stop -> about +1R kept
+        self.ex.move("DOGEUSDT", trade["stop"] * 0.999)
+        self.executor.manage()
+        last = self.state["history"][-1]
+        self.assertEqual(last["reason"], "PROFIT_STOP")
+        self.assertGreater(last["pnl"], 0.8 * trade["planned_risk"])
+        self.assertIn("kâr kilidi stopu", self.messages())
+
+    def test_short_lock_is_mirrored_and_a_jump_straight_to_two_r_is_handled_over_two_ticks(self):
+        trade = self.open("XRPUSDT")
+        self.at("XRPUSDT", trade, 2.2)                            # breakeven this tick, lock on the next
+        self.assertTrue(trade["breakeven_done"])
+        self.executor.manage()
+        self.assertTrue(trade["lock_done"])
+        self.assertLess(trade["stop"], trade["entry"])
+        self.assertAlmostEqual(trade["stop"], trade["entry"] - trade["risk_distance"], delta=trade["entry"] * 1e-4)
+
+    def test_failed_lock_keeps_the_old_stop_and_gives_up_after_three_tries(self):
+        trade = self.open("DOGEUSDT")
+        self.at("DOGEUSDT", trade, 1.1)
+        be_id = trade["sl_id"]
+        self.ex.fail_algo = {"STOP_MARKET"}
+        for _ in range(5):
+            self.at("DOGEUSDT", trade, 2.1)
+        self.assertEqual(trade["sl_id"], be_id)
+        self.assertEqual(self.ex.algos[be_id]["algoStatus"], "NEW")
+        self.assertFalse(trade.get("lock_done"))
+        self.assertEqual(trade["lock_failures"], 3)
+
+    def test_lock_disabled(self):
+        self.executor.s = legacy_settings(min_quote_volume=1.0, tp_r=3.0, lock_r=0.0)
+        trade = self.open("DOGEUSDT")
+        self.at("DOGEUSDT", trade, 1.1)
+        self.at("DOGEUSDT", trade, 2.5)
+        self.assertFalse(trade.get("lock_done"))
+        self.assertLess(trade["stop"], trade["entry"] + 0.5 * trade["risk_distance"])

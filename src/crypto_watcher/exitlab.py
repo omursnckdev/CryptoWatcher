@@ -1,7 +1,8 @@
 """Exit-rule shadow test: would a different EXIT have done better on the very same signals?
 
-The live exit is: stop 1R (= atr_stop_multiplier x ATR), target tp_r x R, stop to breakeven after +breakeven_r, time stop after
-max_hold_hours. Three alternatives from the claude-trading-skills `exit-strategies` skill are replayed next to it, on the same real
+The live exit is: stop 1R (= atr_stop_multiplier x ATR), target tp_r x R, stop to breakeven after +breakeven_r, stop to
++lock_stop_r after +lock_r (profit lock, added 2026-11-06; applied to the baseline only, the frozen variants are unchanged), time
+stop after max_hold_hours. Three alternatives from the claude-trading-skills `exit-strategies` skill are replayed next to it, on the same real
 mainnet 5-minute candles, for every signal the signal log has already resolved (opened and skipped alike). Nothing here places an
 order or sends a Telegram message; a failure is logged and never reaches the trading loop.
 
@@ -42,7 +43,7 @@ DECISION = {"min_signals": 150, "min_days": 90, "min_t": 2.0, "min_mean_r": 0.03
 
 
 def replay(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeven_r: float, hold_hours: float, fee: float,
-           tranches=None, trail_after_r=None, trail_r=None, extend=False) -> dict | None:
+           tranches=None, trail_after_r=None, trail_r=None, extend=False, lock_r=0.0, lock_stop_r=0.0) -> dict | None:
     """Replay one trade with partial exits / trailing stop on 5-minute bars [open_time, open, high, low, close, ...].
 
     Conventions are those of signals.simulate so that the default arguments reproduce it exactly: entry = open of the first bar;
@@ -60,7 +61,7 @@ def replay(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeve
     stop = entry - sign * distance
     be_stop = entry * (1 + sign * 2 * fee)
     left, gross, filled = 1.0, 0.0, [False] * len(levels)
-    be_armed = trail_armed = False
+    be_armed = trail_armed = locked = False
     best = entry
     start, hold_ms = int(bars[0][0]), hold_hours * HOUR_MS
     limit_ms = 2 * hold_ms if extend else hold_ms
@@ -71,7 +72,8 @@ def replay(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeve
         if sign * (worst - stop) <= 0:                                   # stop / breakeven / trail: the rest leaves here
             price = stop if sign * (o - stop) > 0 else o
             gross += left * sign * (price - entry) / distance
-            left, reason = 0.0, ("TRAIL" if trail_armed and sign * (stop - be_stop) > 0 else "BE" if be_armed else "SL")
+            left, reason = 0.0, ("TRAIL" if trail_armed and sign * (stop - be_stop) > 0 else "LOCK" if locked
+                                 else "BE" if be_armed else "SL")
             break
         for i, (level, fraction) in enumerate(levels):
             if not filled[i] and sign * (top - (entry + sign * level * distance)) >= 0:
@@ -87,6 +89,10 @@ def replay(side: str, distance_frac: float, bars: list, *, tp_r: float, breakeve
         if breakeven_r and not be_armed and sign * (top - entry) >= breakeven_r * distance:
             be_armed = True
             stop = be_stop if sign * (be_stop - stop) > 0 else stop
+        if lock_r and not locked and sign * (top - entry) >= lock_r * distance:
+            locked = True
+            lock_stop = entry + sign * lock_stop_r * distance
+            stop = lock_stop if sign * (lock_stop - stop) > 0 else stop
         if trail_after_r is not None and sign * (best - entry) >= trail_after_r * distance:
             trail_armed = True
             candidate = best - sign * trail_r * distance
@@ -202,7 +208,7 @@ class ExitLab:
     def _replay_all(self, signal: dict, bars: list) -> dict | None:
         rules = self._rules()
         args = (signal["side"], signal["distance_frac"], bars)
-        base = replay(*args, **rules)
+        base = replay(*args, **rules, lock_r=self.s.lock_r, lock_stop_r=self.s.lock_stop_r)
         out = {"base": base}
         for name, v in VARIANTS.items():
             if v["tranches"] is None:

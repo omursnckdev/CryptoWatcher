@@ -89,6 +89,7 @@ ATR bandı dışı, sinyal mumundan beri fiyat > 1 ATR kaymış, aleyhte haber, 
 SL 147.0 (-2.1%) · TP 156.8 (+4.4%) · risk 100 USDT · 📰 +0.3 (3)
 
 🛡 SOLUSDT stop başa baş: 150.35
+🔐 SOLUSDT kâr kilitlendi: stop 153.40 (+1R)
 
 ✅ SOLUSDT LONG kapandı · hedef
 150.20 → 156.80 · +195.30 USDT (+1.9R) · 3sa 12dk
@@ -399,6 +400,17 @@ Binance ve haber siteleri için kapatın veya `python -m pip install -U certifi`
 python -m unittest discover -s tests -v    # 132 test; ağ gerektirmez
 cryptowatcher scan --demo --json
 ```
+
+## Kasım 2026: ters mod ve kâr kilidi (kullanıcı kararı, testnet)
+
+- **Ters mod** (`invert_direction = true`): sinyal kararı aynen verilir (filtreler, skor, limitler), ama işlem **tersi yönde** açılır:
+  LONG sinyali → SHORT, SHORT → LONG; stop ve hedef girişe göre aynalanır. `/status` satırı `🔄 TERS MOD`, açılış mesajı
+  `🔄 ters (LONG sinyali)` gösterir; `/top` asıl sinyali gösterir. Kayıtlarda `inverted` / `orig_side` tutulur.
+  Geçmiş test (2023-26, 7959 sinyal, maliyet dahil): asıl strateji +0,078R/işlem, ters mod −0,096R/işlem (t −3,4, iki dönemde de eksi).
+- **Kâr kilidi** (`lock_r = 2.0`, `lock_stop_r = 1.0`): +1R'de stop girişe çekildikten sonra fiyat +2R'ye ulaşınca stop +1R'ye çekilir
+  (yeni stop önce konur, eski sonra iptal edilir). Bu stoptan kapanış `PROFIT_STOP` / "kâr kilidi stopu" olarak raporlanır.
+  `/atlanan` simülasyonu ve `/cikis` testinin "mevcut" çıkışı da bu kuralı içerir (`/cikis` alternatifleri değişmedi).
+  Kapatmak için `lock_r = 0`.
 
 Kaynak düzeni: `config.py` (ayarlar/sırlar) · `binance.py` (REST istemcisi, testnet kilidi) · `data.py` (mum/ticker/evren, demo veri) ·
 `indicators.py` · `strategy.py` (skor + risk planı, saf fonksiyonlar) · `engine.py` (tarama) · `news.py` · `executor.py` (emir/pozisyon
