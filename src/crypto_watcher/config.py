@@ -137,8 +137,8 @@ class Settings:
             raise ValueError("tp_r must be >= minimum_rr")
         if not 0 <= self.breakeven_r < self.tp_r:
             raise ValueError("breakeven_r must be in [0, tp_r)")
-        if self.lock_r and not 0 < self.lock_stop_r < self.lock_r < self.tp_r:
-            raise ValueError("profit lock needs 0 < lock_stop_r < lock_r < tp_r")
+        if self.lock_r and not 0 < self.lock_stop_r < self.lock_r:       # lock_r >= tp_r: only trades opened with a farther target lock
+            raise ValueError("profit lock needs 0 < lock_stop_r < lock_r")
         if not (self.watch_score < self.entry_score <= self.strong_score <= 100):
             raise ValueError("Require watch_score < entry_score <= strong_score <= 100")
         if self.extreme_funding < self.crowded_funding:

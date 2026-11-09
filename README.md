@@ -411,6 +411,8 @@ cryptowatcher scan --demo --json
   (yeni stop önce konur, eski sonra iptal edilir). Bu stoptan kapanış `PROFIT_STOP` / "kâr kilidi stopu" olarak raporlanır.
   `/atlanan` simülasyonu ve `/cikis` testinin "mevcut" çıkışı da bu kuralı içerir (`/cikis` alternatifleri değişmedi).
   Kapatmak için `lock_r = 0`.
+- **Hedef 2R** (`tp_r = 2.0`, 9 Kasım 2026, kullanıcı kararı; önceki 3R). Kâr kilidi yalnızca hedefi 2R'den uzak işlemlerde
+  çalışır (3R hedefle açılmış eski pozisyonlar); 2R hedefli yeni işlemlerde hedef önce gelir. Açık pozisyonların borsadaki hedefi değişmez.
 
 Kaynak düzeni: `config.py` (ayarlar/sırlar) · `binance.py` (REST istemcisi, testnet kilidi) · `data.py` (mum/ticker/evren, demo veri) ·
 `indicators.py` · `strategy.py` (skor + risk planı, saf fonksiyonlar) · `engine.py` (tarama) · `news.py` · `executor.py` (emir/pozisyon

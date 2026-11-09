@@ -660,3 +660,20 @@ class ProfitLockTests(Base):
         self.at("DOGEUSDT", trade, 2.5)
         self.assertFalse(trade.get("lock_done"))
         self.assertLess(trade["stop"], trade["entry"] + 0.5 * trade["risk_distance"])
+
+    def test_lock_is_skipped_when_the_target_is_not_beyond_it(self):
+        self.executor.s = legacy_settings(min_quote_volume=1.0, tp_r=2.0, lock_r=2.0, lock_stop_r=1.0)
+        trade = self.open("DOGEUSDT")                            # opened with a 2R target
+        self.assertAlmostEqual(trade["take_profit"] - trade["entry"], 2 * trade["risk_distance"], delta=trade["entry"] * 1e-4)
+        self.at("DOGEUSDT", trade, 1.1)
+        self.assertFalse(self.executor._lock_profit(trade, trade["entry"] + 2.05 * trade["risk_distance"]))
+        self.assertFalse(trade.get("lock_done"))
+        self.assertFalse([c for c in self.ex.calls if c[0] == "algo" and c[-1].startswith("cw-lk-")])
+
+    def test_a_trade_opened_with_a_3r_target_keeps_its_lock_after_switching_to_2r(self):
+        trade = self.open("DOGEUSDT")                            # 3R target (this class's settings)
+        self.executor.s = legacy_settings(min_quote_volume=1.0, tp_r=2.0, lock_r=2.0, lock_stop_r=1.0)
+        self.at("DOGEUSDT", trade, 1.1)
+        self.at("DOGEUSDT", trade, 2.1)
+        self.assertTrue(trade["lock_done"])
+        self.assertGreater(trade["stop"], trade["entry"] + 0.9 * trade["risk_distance"])

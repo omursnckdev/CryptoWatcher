@@ -490,6 +490,8 @@ class Executor:
             return False
         sign = 1 if trade["side"] == "LONG" else -1
         distance = trade["risk_distance"]
+        if sign * (trade["take_profit"] - trade["entry"]) <= self.s.lock_r * distance:
+            return False                                       # the target comes first (e.g. a 2R target with a 2R lock)
         if sign * (mark - trade["entry"]) < self.s.lock_r * distance:
             return False
         new_stop = round_step(trade["entry"] + sign * self.s.lock_stop_r * distance, self.infos[trade["symbol"]].tick, ROUND_HALF_UP)

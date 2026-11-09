@@ -32,9 +32,9 @@ max_open_positions = 5
 max_same_direction = 3
 max_daily_loss_fraction = 0.05 # günlük gerçekleşen zarar bu orana ulaşırsa yeni işlem yok
 atr_stop_multiplier = 3.0      # geniş stop: komisyon+kayma R başına daha ucuz
-tp_r = 3.0
+tp_r = 2.0                     # hedef 2R (Kasım 2026: 3R yerine; kullanıcı kararı)
 breakeven_r = 1.0              # +1R'de stop girişe çekilir (0 = kapalı)
-lock_r = 2.0                   # kâr kilidi: +2R'de stop +lock_stop_r'ye çekilir (0 = kapalı)
+lock_r = 2.0                   # kâr kilidi: +2R'de stop +lock_stop_r'ye çekilir (0 = kapalı); hedefi 2R'den büyük işlemlerde (ör. 3R ile açılmış eskiler) çalışır
 lock_stop_r = 1.0
 max_hold_hours = 48
 cooldown_minutes = 120
