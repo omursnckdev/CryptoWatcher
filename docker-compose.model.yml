@@ -1,0 +1,20 @@
+# Run next to the bot, as its own compose project:  docker compose -f docker-compose.model.yml up -d --build
+# No .env and no API keys: it only reads public Binance market data and never places orders.
+name: cryptowatcher-model
+services:
+  model-shadow:
+    build:
+      context: .
+      dockerfile: Dockerfile.model
+    container_name: cw-model-shadow
+    restart: unless-stopped
+    mem_limit: 1200m                 # if it ever overruns, only this container dies, not the trading bot
+    cpus: 1.0
+    volumes:
+      - cw-model:/app/state          # model.pkl and model_events.jsonl
+      - ./config:/app/config:ro      # universe settings (min_quote_volume, max_symbols ...) are read from here
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  cw-model:
