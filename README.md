@@ -371,35 +371,13 @@ Bot, **tek bir dondurulmuş hipotezi** gerçek zamanlı ve işlem açmadan izler
 - Docker'da dosyayı görmek için: `sudo docker compose exec cryptowatcher cat /app/state/shadow.jsonl`.
 - Beklenti: yılda ~700-1000 olay, yani karar için yaklaşık 3 ay. Etkinin küçük olması bekleniyor (maliyetin birkaç on baz puan üstü en iyi ihtimalle).
 
-## Model gölge servisi (ayrı konteyner, işlem açmaz)
+## Denenip rafa kaldırılanlar (Kasım 2026)
 
-`src/crypto_watcher/model_shadow.py`: gradient boosting modeli her saat kapanmış 1 saatlik mumlardan (botun kendi göstergeleri + BTC'ye göre güç)
-**24 saat sonra fiyatın kendi volatilitesine göre nereye gideceğini** (aşağı / yatay / yukarı) tahmin eder. Güvenli olduğunda LONG ya da SHORT
-**kararı** `model_events.jsonl` dosyasına yazılır; emir, Telegram mesajı ve API anahtarı yoktur. 24 saat sonra sonuç gerçek mumlardan ve
-gerçek funding'den (14 bp maliyetle) hesaplanır ve aynı olaylarda üç basit tabanla karşılaştırılır: tersi, momentum (son 24 saatin yönü), hep long.
-
-- **Karar kuralı (donduruldu):** `p_up ≥ 0,42` ve `p_up − p_down ≥ 0,12` → LONG; SHORT aynası. Şans seviyesi ~0,31.
-- **Dürüstlük:** yürüyen ileri eğitim (walk-forward). Etiketi henüz bilinmeyen satırlar eğitimden çıkarılır (purge), model haftada bir yeniden eğitilir.
-- **Önceden yazılmış karar kuralı (`DECISION`):** ≥150 örtüşmesiz olay, ≥90 gün, ort ≥ +15 bp, gün-kümeli t ≥ 2,0, ayların ≥ %60'ı pozitif **ve** en iyi tabana karşı eşli t ≥ 1,65.
-  Geçse bile otomatik canlıya alınmaz. Eşikler sonuçlara bakılarak değiştirilmemelidir.
-- **İlk geçmiş test (12 Kasım 2026, data.binance.vision mumları, aynı kod):** 10 coin (BTC ETH SOL XRP DOGE BNB ADA LINK AVAX SUI),
-  2025-11..2026-11, fonlama hariç: n=234, ort **−77 bp**, t −2,2, ayların %31'i pozitif; tabanlar: tersi +49, momentum +24, hep long +22;
-  en iyi tabana karşı eşli t −1,8 → **KURALI GEÇMEDİ**. İki yarıda da (−78 / −76 bp), LONG ve SHORT'ta da (−42 / −111 bp) eksi.
-  Tersinin artısı sonuçlara bakılarak seçildiği için sinyal sayılmamalı. Bu sonuçla servisin arka planda çalıştırılması önerilmez.
-
-```bash
-# 1) Önce geçmiş veride dene (dakikalar sürer, emir yok). Fonlama dahil değildir.
-docker compose -f docker-compose.model.yml build
-docker compose -f docker-compose.model.yml run --rm model-shadow cryptowatcher-model --state-dir /app/state backtest --months 12 --symbols 10
-# 2) Beğenirseniz arka planda çalıştırın
-docker compose -f docker-compose.model.yml up -d
-docker compose -f docker-compose.model.yml logs -f --tail 50
-# 3) Özet
-docker compose -f docker-compose.model.yml exec model-shadow cryptowatcher-model --state-dir /app/state report
-```
-
-Bellek sınırı 1,2 GB ve 1 çekirdektir; aşılırsa yalnızca bu konteyner kapanır, işlem botu etkilenmez. İlk açılışta ~1 yıllık mum indirip modeli eğitir (birkaç dakika).
-Binance mainnet verisi bazı ülke/IP'lerde engelli olabilir (HTTP 451); servis o zaman başlamaz.
+- **Model gölge servisi** (gradient boosting, 24 saatlik yön tahmini): geçmiş testte işlem başı −77 bp (10 coin, 12 ay, t −2,2) ve sunucuda
+  −75 bp (t −1,8); en basit tabanlardan bile kötü. Kod silindi (geri almak için: `git revert` ile 736ce3e'yi geri getirin).
+- **Meta-labeling** (aynı tür model, botun kendi sinyallerine "al / alma" filtresi; 24 coin, 13.780 sinyal, 2023-24 eğitim / 2025-26 test,
+  ön kayıtlı kural): alınan − alınmayan +0,034R, t +0,68; 2025'te +0,12R, 2026'da −0,08R → geçmedi. Aynı veride asıl yön +0,016R,
+  ters yön −0,080R/işlem (2R hedef, maliyet dahil, funding hariç).
 
 ## Sorun giderme
 

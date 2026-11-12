@@ -9,12 +9,8 @@ description = "Explainable Binance USDS-M futures (testnet) long/short trading b
 requires-python = ">=3.12"
 dependencies = ["numpy>=1.26,<3", "pandas>=2.2,<4", "requests>=2.31,<3", "truststore>=0.9"]
 
-[project.optional-dependencies]
-model = ["scikit-learn>=1.4,<2"]     # only the separate model-shadow service needs it; the trading bot does not
-
 [project.scripts]
 cryptowatcher = "crypto_watcher.cli:main"
-cryptowatcher-model = "crypto_watcher.model_shadow:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
